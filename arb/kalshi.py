@@ -48,8 +48,12 @@ class KalshiClient:
         self._client  = httpx.Client(base_url=self.base_url, timeout=15)
         log.info(f"KalshiClient init — {'DEMO' if demo else 'LIVE'} @ {self.base_url}")
 
-        # Load RSA private key if configured
-        if self.key_file:
+        # Load RSA private key — from env var (Render) or file path (local)
+        pem_env = os.getenv("KALSHI_PRIVATE_KEY", "")
+        if pem_env:
+            self._private_key = serialization.load_pem_private_key(pem_env.encode(), password=None)
+            log.info("RSA private key loaded from KALSHI_PRIVATE_KEY env var")
+        elif self.key_file:
             pem_path = Path(self.key_file)
             if not pem_path.is_absolute():
                 pem_path = Path(__file__).parent.parent / self.key_file

@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: kalshi-weather-arb
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python dashboard/app.py
+    envVars:
+      - key: DASHBOARD_PORT
+        value: 10000
+      - key: KALSHI_DEMO
+        value: "false"
+      - key: AUTO_EXECUTE
+        value: "true"
+      - key: DAILY_PROFIT_GOAL
+        value: "100"
+      - key: SCAN_INTERVAL_MINS
+        value: "30"
+      - key: SCAN_START_ET
+        value: "9"
+      - key: SCAN_END_ET
+        value: "15"
+      - key: MIN_EDGE
+        value: "0.04"
+      - key: STRONG_EDGE
+        value: "0.12"
+      - key: MIN_PROB
+        value: "0.55"
+      - key: MAX_SPREAD
+        value: "5"
+      - key: KELLY_FRACTION
+        value: "0.25"
+      - key: MAX_PCT_BANKROLL
+        value: "0.05"
+      - key: MAX_TOTAL_DEPLOY
+        value: "0.40"
+      # Secrets — set these manually in the Render dashboard, not here
+      - key: KALSHI_EMAIL
+        sync: false
+      - key: KALSHI_PASSWORD
+        sync: false
+      - key: KALSHI_KEY_ID
+        sync: false
+      - key: KALSHI_PRIVATE_KEY
+        sync: false
