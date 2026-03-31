@@ -59,6 +59,8 @@ class TradeOpportunity:
     price_a:        int        # yes_ask in cents
     ticker_b:       str | None = None
     price_b:        int | None = None
+    side_a:         str = "yes"     # "yes" or "no" — which side to buy for ticker_a
+    side_b:         str = "yes"     # always "yes" for adjacent spreads
 
     our_prob:       float = 0.0    # our model's P(win)
     market_implied: float = 0.0    # market's implied P(win), = cost/100
@@ -164,6 +166,8 @@ def find_opportunities(
 
     # ── Single-bin opportunities (strong edge only) ───────────────────────────
     for market in markets:
+        if market.get("type") != "bin":
+            continue
         our_prob = forecast.prob_in_range(market["low"], market["high"])
         price    = market["yes_ask"]
         market_implied = price / 100.0
@@ -189,6 +193,60 @@ def find_opportunities(
             ensemble_n     = len(forecast.members),
         )
         log.info(f"  SINGLE-BIN found: {opp}")
+        opportunities.append(opp)
+
+    # ── Threshold markets (above/below X°F) — check both YES and NO sides ─────
+    threshold_markets = [m for m in markets if m.get("type") == "threshold"]
+    for mkt in threshold_markets:
+        threshold = mkt["threshold"]
+        yes_ask = mkt["yes_ask"]
+        # NO ask = 100 - yes_bid (what it costs to buy NO / be short)
+        yes_bid = mkt.get("yes_bid", 100 - yes_ask)
+        no_ask  = mkt.get("no_ask", 100 - yes_bid)
+
+        prob_above = forecast.prob_above(threshold)
+        prob_below = 1.0 - prob_above
+
+        # YES direction: buy YES at yes_ask, win if high ≥ threshold
+        edge_yes = prob_above - yes_ask / 100.0
+        # NO direction: buy NO at no_ask, win if high < threshold
+        edge_no  = prob_below - no_ask / 100.0
+
+        # Take whichever direction has better edge
+        if edge_yes >= edge_no:
+            edge, side, price, our_prob = edge_yes, "yes", yes_ask, prob_above
+            low_t, high_t = threshold, 999.0
+            dir_label = f"≥{threshold:.0f}°F"
+        else:
+            edge, side, price, our_prob = edge_no, "no", no_ask, prob_below
+            low_t, high_t = 0.0, threshold
+            dir_label = f"<{threshold:.0f}°F"
+
+        if edge < MIN_EDGE:
+            continue
+        if our_prob < MIN_PROB:
+            continue
+
+        opp = TradeOpportunity(
+            city_key       = forecast.city_key,
+            trade_type     = "single_bin",
+            ticker_a       = mkt["ticker"],
+            price_a        = price,
+            side_a         = side,
+            our_prob       = our_prob,
+            market_implied = price / 100.0,
+            edge           = edge,
+            low_temp       = low_t,
+            high_temp      = high_t,
+            forecast_mean  = forecast.corrected_mean,
+            forecast_std   = forecast.std,
+            ensemble_n     = len(forecast.members),
+        )
+        opp.notes = [
+            f"threshold: high {dir_label} (buy {side.upper()})",
+            f"ensemble μ={forecast.corrected_mean:.1f}°F σ={forecast.std:.1f}°F",
+        ]
+        log.info(f"  THRESHOLD found: {opp}")
         opportunities.append(opp)
 
     # Sort best edge first, cap per city

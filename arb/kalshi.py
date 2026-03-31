@@ -7,17 +7,22 @@ and order placement. All prices are in cents (0–100).
 
 from __future__ import annotations
 
+import base64
 import os
+import time
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 import httpx
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from arb.logger import get_logger
 
 log = get_logger("kalshi")
 
-KALSHI_BASE  = "https://trading.kalshi.com/trade-api/v2"
+KALSHI_BASE  = "https://api.elections.kalshi.com/trade-api/v2"
 KALSHI_DEMO  = "https://demo.kalshi.co/trade-api/v2"
 
 
@@ -32,26 +37,76 @@ class KalshiClient:
     """
 
     def __init__(self):
-        self.email    = os.environ["KALSHI_EMAIL"]
-        self.password = os.environ["KALSHI_PASSWORD"]
+        self.email    = os.getenv("KALSHI_EMAIL", "")
+        self.password = os.getenv("KALSHI_PASSWORD", "")
+        self.key_id   = os.getenv("KALSHI_KEY_ID", "")
+        self.key_file = os.getenv("KALSHI_PRIVATE_KEY_FILE", "")
         demo          = os.getenv("KALSHI_DEMO", "false").lower() == "true"
         self.base_url = KALSHI_DEMO if demo else KALSHI_BASE
         self.token: Optional[str] = None
+        self._private_key = None
         self._client  = httpx.Client(base_url=self.base_url, timeout=15)
         log.info(f"KalshiClient init — {'DEMO' if demo else 'LIVE'} @ {self.base_url}")
 
+        # Load RSA private key if configured
+        if self.key_file:
+            pem_path = Path(self.key_file)
+            if not pem_path.is_absolute():
+                pem_path = Path(__file__).parent.parent / self.key_file
+            if pem_path.exists():
+                pem_data = pem_path.read_bytes()
+                self._private_key = serialization.load_pem_private_key(pem_data, password=None)
+                log.info(f"RSA private key loaded from {pem_path}")
+
     # ── Auth ─────────────────────────────────────────────────────────────────
 
+    def _sign(self, method: str, path: str) -> dict:
+        """Generate RSA-signed auth headers for Kalshi API key auth."""
+        ts = str(int(time.time() * 1000))
+        # Full path must include /trade-api/v2 prefix
+        full_path = "/trade-api/v2" + path if not path.startswith("/trade-api") else path
+        msg = (ts + method.upper() + full_path).encode()
+        sig = self._private_key.sign(
+            msg,
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+            hashes.SHA256(),
+        )
+        return {
+            "KALSHI-ACCESS-KEY":       self.key_id,
+            "KALSHI-ACCESS-TIMESTAMP": ts,
+            "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
+        }
+
     def login(self) -> None:
-        r = self._client.post("/login", json={"email": self.email, "password": self.password})
+        if self._private_key and self.key_id:
+            # RSA key-based auth — no login needed, headers signed per-request
+            self.token = "api_key"   # sentinel so _ensure_auth() passes
+            log.info("Kalshi auth: using RSA API key signing")
+            return
+        # Fallback: email/password
+        base = self.base_url.replace("/trade-api/v2", "")
+        r = self._client.post(f"{base}/v1/log_in", json={"email": self.email, "password": self.password})
         r.raise_for_status()
-        self.token = r.json()["token"]
+        body = r.json()
+        self.token = body.get("token") or body.get("access_token")
+        if not self.token:
+            raise RuntimeError(f"No token in login response: {list(body.keys())}")
         self._client.headers["Authorization"] = f"Bearer {self.token}"
-        log.info("Kalshi login successful")
+        log.info("Kalshi login successful (email/password)")
 
     def _ensure_auth(self) -> None:
         if not self.token:
             self.login()
+
+    def _get(self, path: str, **kwargs):
+        self._ensure_auth()
+        headers = self._sign("GET", path) if self._private_key else {}
+        return self._client.get(path, headers=headers, **kwargs)
+
+    def _post(self, path: str, **kwargs):
+        self._ensure_auth()
+        headers = self._sign("POST", path) if self._private_key else {}
+        return self._client.post(path, headers=headers, **kwargs)
 
     # ── Market discovery ──────────────────────────────────────────────────────
 
@@ -67,7 +122,7 @@ class KalshiClient:
             params: dict = {"series_ticker": series_ticker, "status": status, "limit": 100}
             if cursor:
                 params["cursor"] = cursor
-            r = self._client.get("/markets", params=params)
+            r = self._get("/markets", params=params)
             r.raise_for_status()
             body = r.json()
             markets.extend(body.get("markets", []))
@@ -79,21 +134,27 @@ class KalshiClient:
 
     def get_orderbook(self, ticker: str) -> dict:
         """
-        Fetch the order book for a market ticker.
-        Returns {yes_bids: [...], yes_asks: [...], no_bids: [...], no_asks: [...]}
-        where prices are integers 0–100 (cents).
+        Returns normalized orderbook: {yes_bid, yes_ask, no_bid, no_ask} in cents (int).
+        Kalshi returns orderbook_fp with yes_dollars/no_dollars as bid lists.
+        yes_dollars = YES bids; best YES ask = 100 - best_no_bid
+        no_dollars  = NO bids;  best NO ask  = 100 - best_yes_bid
         """
-        self._ensure_auth()
-        r = self._client.get(f"/markets/{ticker}/orderbook")
+        r = self._get(f"/markets/{ticker}/orderbook")
         r.raise_for_status()
-        return r.json()["orderbook"]
+        fp = r.json().get("orderbook_fp", {})
+        yes_bids = fp.get("yes_dollars", [])
+        no_bids  = fp.get("no_dollars", [])
+        best_yes_bid = round(float(yes_bids[0][0]) * 100) if yes_bids else None
+        best_no_bid  = round(float(no_bids[0][0])  * 100) if no_bids  else None
+        return {
+            "yes_bid": best_yes_bid,
+            "yes_ask": (100 - best_no_bid)  if best_no_bid  is not None else None,
+            "no_bid":  best_no_bid,
+            "no_ask":  (100 - best_yes_bid) if best_yes_bid is not None else None,
+        }
 
     def get_market(self, ticker: str) -> dict:
-        """
-        Fetch a single market's metadata (result, status, yes_ask, yes_bid, etc).
-        """
-        self._ensure_auth()
-        r = self._client.get(f"/markets/{ticker}")
+        r = self._get(f"/markets/{ticker}")
         r.raise_for_status()
         return r.json()["market"]
 
@@ -120,7 +181,6 @@ class KalshiClient:
         price       : limit price in cents (e.g. 45 = 45¢ per contract)
         order_type  : 'limit' (default) or 'market'
         """
-        self._ensure_auth()
         payload = {
             "ticker":     ticker,
             "action":     action,
@@ -129,7 +189,7 @@ class KalshiClient:
             "count":      count,
             "yes_price":  price if side == "yes" else (100 - price),
         }
-        r = self._client.post("/portfolio/orders", json=payload)
+        r = self._post("/portfolio/orders", json=payload)
         r.raise_for_status()
         order = r.json()["order"]
         log.info(
@@ -141,23 +201,17 @@ class KalshiClient:
     # ── Portfolio ─────────────────────────────────────────────────────────────
 
     def get_balance(self) -> float:
-        """Returns available balance in dollars."""
-        self._ensure_auth()
-        r = self._client.get("/portfolio/balance")
+        r = self._get("/portfolio/balance")
         r.raise_for_status()
-        return r.json()["balance"] / 100   # API returns cents
+        return r.json()["balance"] / 100
 
     def get_positions(self) -> list[dict]:
-        """Returns all open positions."""
-        self._ensure_auth()
-        r = self._client.get("/portfolio/positions")
+        r = self._get("/portfolio/positions")
         r.raise_for_status()
         return r.json().get("positions", [])
 
     def get_fills(self) -> list[dict]:
-        """Returns recent order fills."""
-        self._ensure_auth()
-        r = self._client.get("/portfolio/fills")
+        r = self._get("/portfolio/fills")
         r.raise_for_status()
         return r.json().get("fills", [])
 
@@ -183,49 +237,122 @@ def parse_bin_market(market: dict) -> Optional[dict]:
     title  = market.get("title", "")
     ticker = market.get("ticker", "")
 
-    # Pattern 1: "between Xf and Yf" or "X to Y"
-    m = re.search(r"(\d+)[°\s]*F.*?(\d+)[°\s]*F", title, re.IGNORECASE)
-    if m:
-        low, high = float(m.group(1)), float(m.group(2))
+    # Primary: ticker suffix -B{center} e.g. -B74.5 = range 74–75°F (1°F bin)
+    m_bin = re.search(r"-B([\d.]+)$", ticker)
+    if m_bin:
+        center = float(m_bin.group(1))
+        low    = round(center - 0.5, 1)
+        high   = round(center + 0.5, 1)
+        ask    = market.get("yes_ask")
+        bid    = market.get("yes_bid")
         return {
-            "ticker":   ticker,
-            "low":      min(low, high),
-            "high":     max(low, high),
-            "yes_ask":  market.get("yes_ask", 50),
-            "yes_bid":  market.get("yes_bid", 50),
-            "title":    title,
+            "ticker":  ticker,
+            "low":     low,
+            "high":    high,
+            "yes_ask": ask if ask is not None else 50,
+            "yes_bid": bid if bid is not None else 48,
+            "title":   title,
+            "type":    "bin",
         }
 
-    # Pattern 2: ticker suffix like -B70 (above 70) or -BT70 (between 70-75)
-    m2 = re.search(r"-B(\d+)$", ticker)
-    if m2:
-        threshold = float(m2.group(1))
+    # Fallback: parse title "be 74-75°" or "be 74-75°F"
+    m_range = re.search(r"be\s+([\d.]+)[–\-]([\d.]+)[°]", title)
+    if m_range:
+        low  = float(m_range.group(1))
+        high = float(m_range.group(2))
+        ask  = market.get("yes_ask")
+        bid  = market.get("yes_bid")
         return {
-            "ticker":    ticker,
-            "low":       threshold,
-            "high":      threshold + 5,   # assume 5°F bins
-            "yes_ask":   market.get("yes_ask", 50),
-            "yes_bid":   market.get("yes_bid", 50),
-            "title":     title,
+            "ticker":  ticker,
+            "low":     low,
+            "high":    high,
+            "yes_ask": ask if ask is not None else 50,
+            "yes_bid": bid if bid is not None else 48,
+            "title":   title,
+            "type":    "bin",
         }
 
     return None
 
 
+def parse_threshold_market(market: dict) -> Optional[dict]:
+    """
+    Parse a threshold market (above/below a single temperature).
+
+    Kalshi threshold tickers look like:
+      KXHIGHNY-25MAR30-T60   → "NYC high at least 60°F" (YES = above 60)
+      KXHIGHTHOU-25MAR30-T95 → "HOU high at least 95°F"
+
+    Returns {threshold, direction, ticker, yes_ask, yes_bid, type}
+    or None if not parseable.
+    """
+    import re
+    ticker = market.get("ticker", "")
+    m_t = re.search(r"-T([\d.]+)$", ticker)
+    if not m_t:
+        return None
+    threshold = float(m_t.group(1))
+    ask = market.get("yes_ask")
+    bid = market.get("yes_bid")
+    return {
+        "ticker":    ticker,
+        "threshold": threshold,
+        "direction": "above",   # YES = high is AT LEAST this temp
+        "yes_ask":   ask if ask is not None else 50,
+        "yes_bid":   bid if bid is not None else 48,
+        "title":     market.get("title", ""),
+        "type":      "threshold",
+    }
+
+
+def enrich_with_orderbook_prices(
+    parsed_markets: list[dict],
+    client: "KalshiClient",
+    max_spread: int = 20,
+) -> list[dict]:
+    """
+    Fetch real orderbook prices for markets and filter illiquid ones.
+
+    max_spread : maximum yes_ask - yes_bid (in cents) to consider tradeable.
+                 Wide-spread markets (e.g., 1¢ bid / 99¢ ask) are excluded.
+    """
+    enriched = []
+    for m in parsed_markets:
+        needs_ob = m.get("yes_ask") in (None, 50) or m.get("yes_bid") in (None, 48)
+        if needs_ob:
+            try:
+                ob = client.get_orderbook(m["ticker"])
+                if ob.get("yes_ask") is not None:
+                    m["yes_ask"] = ob["yes_ask"]
+                if ob.get("yes_bid") is not None:
+                    m["yes_bid"] = ob["yes_bid"]
+                if ob.get("no_ask") is not None:
+                    m["no_ask"] = ob["no_ask"]
+                if ob.get("no_bid") is not None:
+                    m["no_bid"] = ob["no_bid"]
+            except Exception:
+                pass
+
+        # Skip markets where the bid-ask spread is too wide (illiquid)
+        ask = m.get("yes_ask")
+        bid = m.get("yes_bid")
+        if ask is not None and bid is not None and (ask - bid) > max_spread:
+            continue
+        enriched.append(m)
+    return enriched
+
+
 def find_adjacent_bins(markets: list[dict]) -> list[tuple[dict, dict]]:
     """
-    Given a list of parsed bin markets, return pairs of adjacent bins
-    (i.e., where one bin's high == next bin's low).
-
-    Sorted by temperature ascending.
+    Return pairs of adjacent 1°F bins sorted by temperature.
+    Bins are adjacent when b.low == a.high (within 0.01°F tolerance).
     """
-    parsed = [p for m in markets if (p := parse_bin_market(m)) is not None]
-    parsed.sort(key=lambda x: x["low"])
+    bins = [m for m in markets if m.get("type") == "bin"]
+    bins.sort(key=lambda x: x["low"])
 
     pairs = []
-    for i in range(len(parsed) - 1):
-        a, b = parsed[i], parsed[i + 1]
-        # Adjacent if b.low == a.high (or within 1°F rounding)
-        if abs(b["low"] - a["high"]) <= 1.0:
+    for i in range(len(bins) - 1):
+        a, b = bins[i], bins[i + 1]
+        if abs(b["low"] - a["high"]) < 0.01:
             pairs.append((a, b))
     return pairs

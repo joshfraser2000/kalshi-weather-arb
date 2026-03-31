@@ -120,8 +120,15 @@ async def _fetch_ensemble(
         r.raise_for_status()
         data = r.json()
         dates = data["daily"]["time"]
+        # Use target date if available, else nearest future date
         if str(target_date) in dates:
             idx = dates.index(str(target_date))
+        elif dates:
+            idx = 0
+            log.debug(f"Target {target_date} not in GFS forecast, using {dates[0]}")
+        else:
+            idx = None
+        if idx is not None:
             for key, vals in data["daily"].items():
                 if key.startswith("temperature_2m_max") and key != "temperature_2m_max":
                     v = vals[idx]
@@ -150,6 +157,11 @@ async def _fetch_ensemble(
         dates = data["daily"]["time"]
         if str(target_date) in dates:
             idx = dates.index(str(target_date))
+        elif dates:
+            idx = 0
+        else:
+            idx = None
+        if idx is not None:
             for key, vals in data["daily"].items():
                 if key.startswith("temperature_2m_max") and key != "temperature_2m_max":
                     v = vals[idx]
@@ -178,6 +190,11 @@ async def _fetch_ensemble(
         dates = data["daily"]["time"]
         if str(target_date) in dates:
             idx = dates.index(str(target_date))
+        elif dates:
+            idx = 0
+        else:
+            idx = None
+        if idx is not None:
             for key, vals in data["daily"].items():
                 if key.startswith("temperature_2m_max") and key != "temperature_2m_max":
                     v = vals[idx]

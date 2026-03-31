@@ -119,21 +119,24 @@
 
   <div class="strategy-header">
     <div class="strategy-label">MULTI-CITY DAILY PORTFOLIO</div>
-    <div class="strategy-desc">{{ cities|length }} cities × daily resolution × adjacent-bin spreads · Target: $500/day</div>
+    <div class="strategy-desc">{{ cities|length }} cities × daily resolution × adjacent-bin spreads · Auto-scanner 9 AM–3 PM ET</div>
     <span class="status-badge status-dry" id="statusBadge">SCANNING</span>
   </div>
 
   <!-- Stats row -->
   <div class="stats-grid">
     <div class="stat-card">
-      <div class="stat-label">NET P&amp;L</div>
-      <div class="stat-value green" id="statNet">—</div>
-      <div class="stat-sub" id="statNetSub">loading…</div>
+      <div class="stat-label">TODAY'S P&amp;L</div>
+      <div class="stat-value green" id="statToday">—</div>
+      <div style="margin-top:6px;background:#21262d;border-radius:3px;height:4px;overflow:hidden">
+        <div id="goalBar" style="height:100%;background:#3fb950;width:0%;transition:width 0.4s"></div>
+      </div>
+      <div class="stat-sub" id="statTodaySub">$100 daily goal</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">AVG DAILY NET</div>
-      <div class="stat-value yellow" id="statAvg">—</div>
-      <div class="stat-sub" id="statAvgSub">—</div>
+      <div class="stat-label">NET P&amp;L (ALL TIME)</div>
+      <div class="stat-value green" id="statNet">—</div>
+      <div class="stat-sub" id="statNetSub">loading…</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">WIN RATE (DAYS)</div>
@@ -141,9 +144,9 @@
       <div class="stat-sub" id="statWinSub">—</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">TOTAL FEES PAID</div>
-      <div class="stat-value red" id="statFees">—</div>
-      <div class="stat-sub" id="statFeesSub">—</div>
+      <div class="stat-label">SCANNER</div>
+      <div class="stat-value yellow" id="statScanner">—</div>
+      <div class="stat-sub" id="statScannerSub">—</div>
     </div>
   </div>
 
@@ -165,7 +168,10 @@
   <div class="card">
     <div class="card-title">
       TODAY'S OPPORTUNITIES — <span id="todayDate">{{ today }}</span>
-      <button onclick="refreshOpps()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:3px 10px;border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:10px;">↺ REFRESH</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button onclick="refreshOpps()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:3px 10px;border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:10px;">↺ REFRESH</button>
+        <button id="executeBtn" onclick="executeTrades()" style="background:#3fb95022;border:1px solid #3fb95066;color:var(--green);padding:3px 12px;border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:10px;font-weight:700;display:none">▶ EXECUTE</button>
+      </div>
     </div>
     <div id="oppsEl"><div class="loading">scanning markets…</div></div>
   </div>
@@ -201,12 +207,20 @@ async function loadStats() {
     const fmt = v => (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
     document.getElementById('statNet').textContent    = fmt(d.total_net);
     document.getElementById('statNetSub').textContent = `gross $${d.total_gross.toFixed(2)} – $${d.total_fees.toFixed(2)} fees`;
-    document.getElementById('statAvg').textContent    = fmt(d.avg_daily);
-    document.getElementById('statAvgSub').textContent = `$${(d.total_fees / Math.max(d.days_traded,1)).toFixed(2)}/day in fees`;
     document.getElementById('statWin').textContent    = d.win_rate + '%';
-    document.getElementById('statWinSub').textContent = `${d.win_days}W / ${d.loss_days}L`;
-    document.getElementById('statFees').textContent   = '$' + d.total_fees.toFixed(2);
-    document.getElementById('statFeesSub').textContent = d.days_traded ? `${(d.total_fees / (d.balance||1) * 100).toFixed(1)}% of deployed` : '—';
+    document.getElementById('statWinSub').textContent = `${d.win_days}W / ${d.loss_days}L · avg ${fmt(d.avg_daily)}/day`;
+
+    // Today's P&L vs $100 goal
+    const todayPnl  = d.today_pnl || 0;
+    const goal      = d.daily_goal || 100;
+    const pct       = Math.min(d.goal_progress || 0, 100);
+    document.getElementById('statToday').textContent    = fmt(todayPnl);
+    document.getElementById('statToday').className      = 'stat-value ' + (todayPnl >= 0 ? 'green' : 'red');
+    document.getElementById('goalBar').style.width      = pct + '%';
+    document.getElementById('goalBar').style.background = pct >= 100 ? '#d29922' : '#3fb950';
+    document.getElementById('statTodaySub').textContent = pct >= 100
+      ? `$${goal} goal reached! Trading paused.`
+      : `$${todayPnl.toFixed(2)} / $${goal} goal (${pct.toFixed(0)}%)`;
 
     document.getElementById('statusBadge').textContent = 'LIVE';
     document.getElementById('statusBadge').className   = 'status-badge status-live';
@@ -252,10 +266,8 @@ function renderChart(daily) {
     }
   });
 
-  // Draw $500 target line
-  const target = 500;
-  const max = Math.max(...values, target);
-  // Add as annotation via plugin hack — draw manually
+  // Draw $100 daily goal line
+  const target = 100;
   const origDraw = pnlChart.draw.bind(pnlChart);
   pnlChart.draw = function() {
     origDraw();
@@ -274,11 +286,43 @@ function renderChart(daily) {
       ctx2.stroke();
       ctx2.fillStyle = '#d29922';
       ctx2.font = '10px monospace';
-      ctx2.fillText('$500 target', area.right - 72, yPx - 4);
+      ctx2.fillText('$100 goal', area.right - 60, yPx - 4);
       ctx2.restore();
     }
   };
   pnlChart.draw();
+}
+
+// ── Scanner status ────────────────────────────────────────────────────────────
+async function loadScanner() {
+  try {
+    const r = await fetch('/api/scanner');
+    const d = await r.json();
+    const el    = document.getElementById('statScanner');
+    const elSub = document.getElementById('statScannerSub');
+    if (d.goal_hit) {
+      el.textContent    = 'GOAL HIT';
+      el.className      = 'stat-value yellow';
+      elSub.textContent = `$${d.daily_pnl.toFixed(2)} earned today`;
+    } else if (!d.auto_execute) {
+      el.textContent    = 'MANUAL';
+      el.className      = 'stat-value';
+      elSub.textContent = 'Set AUTO_EXECUTE=true to automate';
+    } else if (d.in_trading_window) {
+      el.textContent    = 'ACTIVE';
+      el.className      = 'stat-value green';
+      const next = d.next_scan ? new Date(d.next_scan).toLocaleTimeString() : '—';
+      elSub.textContent = `next scan ${next}`;
+    } else {
+      el.textContent    = 'STANDBY';
+      el.className      = 'stat-value';
+      elSub.textContent = 'Activates 9 AM – 3 PM ET';
+    }
+    if (d.last_scan) {
+      const ago = Math.round((Date.now() - new Date(d.last_scan)) / 60000);
+      if (ago < 120) elSub.textContent += ` · last scan ${ago}m ago`;
+    }
+  } catch(e) {}
 }
 
 // ── Positions ────────────────────────────────────────────────────────────────
@@ -307,22 +351,62 @@ async function loadPositions() {
 // ── Opportunities ────────────────────────────────────────────────────────────
 async function refreshOpps() {
   const el = document.getElementById('oppsEl');
-  el.innerHTML = '<div class="loading">scanning ' + Object.keys({{cities|tojson}}).length + ' city markets…</div>';
+  el.innerHTML = '<div class="loading">scanning {{ cities|length }} city markets…</div>';
   try {
     const r = await fetch('/api/opportunities?date=' + TODAY);
     const d = await r.json();
-    renderOpps(d.opportunities || [], d.generated_at);
+    if (d.error) {
+      el.innerHTML = '<div class="empty">Error: ' + d.error + '</div>';
+      return;
+    }
+    if (d.kalshi_status === 'not_configured') {
+      // Show weather forecasts instead
+      renderForecasts(d.forecasts || [], d.message, d.generated_at);
+      return;
+    }
+    renderOpps(d.opportunities || [], d.generated_at, d.market_status, d.message);
   } catch(e) {
     el.innerHTML = '<div class="empty">Error loading opportunities — ' + e.message + '</div>';
   }
 }
 
-function renderOpps(opps, generatedAt) {
+function renderForecasts(forecasts, message, generatedAt) {
   const el = document.getElementById('oppsEl');
+  const ts = generatedAt ? new Date(generatedAt).toLocaleTimeString() : '';
+  el.innerHTML = `
+    <div style="background:#d2992211;border:1px solid #d2992244;border-radius:6px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#d29922">
+      <strong>Kalshi credentials not configured.</strong> ${message}
+      <br><span style="color:var(--muted);font-size:11px">Copy .env.example to .env and add your credentials, then restart the server.</span>
+    </div>
+    <div style="color:var(--muted);font-size:10px;margin-bottom:12px">Weather forecasts ready for ${forecasts.length} cities · ${ts}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
+      ${forecasts.map(f => `
+        <div style="background:#21262d;border:1px solid var(--border);border-radius:6px;padding:12px;cursor:pointer" onclick="showForecast('${f.city}')">
+          <div style="font-weight:700;font-size:12px">${f.city} <span style="color:var(--muted);font-weight:400;font-size:10px">${f.city_name}</span></div>
+          <div style="font-size:20px;font-weight:700;color:var(--blue);margin:6px 0">${f.forecast_mean}°F</div>
+          <div style="color:var(--muted);font-size:10px">σ=${f.forecast_std}°F · n=${f.ensemble_n}${f.nws_high ? ' · NWS='+f.nws_high+'°F' : ''}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderOpps(opps, generatedAt, marketStatus, message) {
+  const el  = document.getElementById('oppsEl');
+  const btn = document.getElementById('executeBtn');
   if (!opps.length) {
-    el.innerHTML = '<div class="empty">No opportunities found meeting edge criteria today.<br><span style="font-size:11px;color:var(--muted)">Try lowering MIN_EDGE in .env</span></div>';
+    btn.style.display = 'none';
+    if (marketStatus === 'illiquid') {
+      el.innerHTML = `<div class="empty" style="color:#d29922">
+        <strong>Markets are illiquid right now.</strong><br>
+        <span style="font-size:11px;color:var(--muted)">${message || 'Best results 9 AM – 2 PM Eastern when market makers are active.'}</span>
+      </div>`;
+    } else {
+      el.innerHTML = '<div class="empty">No opportunities found meeting edge criteria today.<br><span style="font-size:11px;color:var(--muted)">Try lowering MIN_EDGE in .env</span></div>';
+    }
     return;
   }
+  btn.style.display = 'block';
   const ts = generatedAt ? new Date(generatedAt).toLocaleTimeString() : '';
   el.innerHTML = `
     <div style="color:var(--muted);font-size:10px;margin-bottom:12px">${opps.length} opportunities found · scanned at ${ts}</div>
@@ -407,13 +491,41 @@ function closeModal(e) {
     document.getElementById('modalBg').classList.remove('open');
 }
 
+// ── Execute trades ───────────────────────────────────────────────────────────
+async function executeTrades() {
+  const btn = document.getElementById('executeBtn');
+  if (!confirm('Place live orders on Kalshi for all current opportunities?')) return;
+  btn.textContent = '⏳ EXECUTING...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/execute', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) {
+      alert('Execute failed: ' + d.error);
+    } else {
+      const ok    = d.results.filter(x => x.status === 'filled').length;
+      const errs  = d.results.filter(x => x.status !== 'filled').length;
+      alert(`Executed ${ok} trades successfully${errs ? ', ' + errs + ' errors' : ''}.\nRefreshing positions...`);
+      loadPositions();
+      loadStats();
+      loadScanner();
+    }
+  } catch(e) {
+    alert('Execute error: ' + e.message);
+  }
+  btn.textContent = '▶ EXECUTE';
+  btn.disabled = false;
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 loadStats();
 loadPositions();
+loadScanner();
 refreshOpps();
 
-// Auto-refresh every 5 minutes
-setInterval(() => { loadStats(); loadPositions(); }, 300_000);
+// Auto-refresh stats + scanner every 60s, positions every 5m
+setInterval(() => { loadStats(); loadScanner(); }, 60_000);
+setInterval(() => { loadPositions(); }, 300_000);
 </script>
 </body>
 </html>
