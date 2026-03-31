@@ -533,6 +533,11 @@ def api_forecast(city_key: str):
 
 # ── Main page ─────────────────────────────────────────────────────────────────
 
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route("/")
 def index():
     today = str(date.today() + timedelta(days=1))
