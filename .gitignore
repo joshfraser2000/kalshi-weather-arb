@@ -1,0 +1,24 @@
+# Secrets — never commit these
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Data & logs
+*.log
+data/cache/
+backtest_results/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

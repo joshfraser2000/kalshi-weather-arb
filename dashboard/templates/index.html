@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kalshi-weather-arb</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --card:     #161b22;
+    --border:   #21262d;
+    --text:     #e6edf3;
+    --muted:    #7d8590;
+    --green:    #3fb950;
+    --yellow:   #d29922;
+    --red:      #f85149;
+    --blue:     #58a6ff;
+    --mono:     'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; }
+
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 16px; font-weight: 700; letter-spacing: 0.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 8px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .badge { background: #1f6feb22; color: var(--blue); border: 1px solid #1f6feb55; padding: 2px 10px; border-radius: 12px; font-size: 11px; }
+
+  .main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+  .strategy-header {
+    margin-bottom: 24px;
+    padding: 16px 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .strategy-label { color: var(--muted); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+  .strategy-desc  { color: var(--text); font-size: 13px; margin-bottom: 8px; }
+  .status-badge   { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+  .status-live    { background: #3fb95022; color: var(--green); border: 1px solid #3fb95044; }
+  .status-dry     { background: #d2992222; color: var(--yellow); border: 1px solid #d2992244; }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+  @media (max-width: 800px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .stat-label { color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px; }
+  .stat-value { font-size: 26px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+  .stat-sub   { color: var(--muted); font-size: 11px; }
+  .green { color: var(--green); }
+  .yellow { color: var(--yellow); }
+  .red    { color: var(--red); }
+  .blue   { color: var(--blue); }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+  .card-title { color: var(--muted); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+  .card-title span { color: var(--muted); font-size: 11px; letter-spacing: 0; }
+
+  /* Opportunities table */
+  .opps-table { width: 100%; border-collapse: collapse; }
+  .opps-table th { color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+  .opps-table td { padding: 10px 8px; border-bottom: 1px solid var(--border)22; font-size: 12px; vertical-align: middle; }
+  .opps-table tr:hover td { background: #ffffff06; }
+  .opp-city { font-weight: 700; }
+  .opp-range { color: var(--blue); }
+  .edge-pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+  .edge-strong { background: #3fb95022; color: var(--green); }
+  .edge-normal { background: #58a6ff22; color: var(--blue); }
+  .type-pill { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; background: #21262d; color: var(--muted); }
+
+  /* Chart */
+  .chart-wrap { position: relative; height: 200px; }
+
+  /* Positions */
+  .pos-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border)44; }
+  .pos-ticker { font-weight: 700; font-size: 12px; }
+  .pos-meta   { color: var(--muted); font-size: 11px; }
+
+  /* Refresh */
+  .refresh-bar { text-align: right; color: var(--muted); font-size: 11px; margin-bottom: 12px; }
+  .refresh-bar button { background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 4px 12px; border-radius: 4px; cursor: pointer; font-family: var(--mono); font-size: 11px; }
+  .refresh-bar button:hover { background: #21262d; }
+
+  .empty { color: var(--muted); text-align: center; padding: 32px; font-size: 12px; }
+  .loading { color: var(--muted); text-align: center; padding: 32px; }
+
+  /* Forecast detail modal */
+  .modal-bg { display: none; position: fixed; inset: 0; background: #00000088; z-index: 100; align-items: center; justify-content: center; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; }
+  .modal-close { float: right; background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
+  .histogram { display: flex; align-items: flex-end; gap: 2px; height: 80px; margin: 16px 0; }
+  .hist-bar { background: var(--blue); opacity: 0.7; border-radius: 2px 2px 0 0; flex: 1; min-width: 4px; transition: opacity 0.2s; position: relative; }
+  .hist-bar:hover { opacity: 1; }
+  .hist-bar.highlight { background: var(--green); opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <div><span class="dot"></span><span style="font-weight:700">kalshi-weather-arb</span></div>
+  <div style="display:flex;gap:12px;align-items:center">
+    <span id="modeLabel" class="badge">DRY RUN</span>
+    <span style="color:var(--muted)" id="clockEl"></span>
+  </div>
+</header>
+
+<div class="main">
+
+  <div class="strategy-header">
+    <div class="strategy-label">MULTI-CITY DAILY PORTFOLIO</div>
+    <div class="strategy-desc">{{ cities|length }} cities × daily resolution × adjacent-bin spreads · Target: $500/day</div>
+    <span class="status-badge status-dry" id="statusBadge">SCANNING</span>
+  </div>
+
+  <!-- Stats row -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">NET P&amp;L</div>
+      <div class="stat-value green" id="statNet">—</div>
+      <div class="stat-sub" id="statNetSub">loading…</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">AVG DAILY NET</div>
+      <div class="stat-value yellow" id="statAvg">—</div>
+      <div class="stat-sub" id="statAvgSub">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">WIN RATE (DAYS)</div>
+      <div class="stat-value green" id="statWin">—</div>
+      <div class="stat-sub" id="statWinSub">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">TOTAL FEES PAID</div>
+      <div class="stat-value red" id="statFees">—</div>
+      <div class="stat-sub" id="statFeesSub">—</div>
+    </div>
+  </div>
+
+  <!-- Chart + Positions -->
+  <div class="two-col">
+    <div class="card">
+      <div class="card-title">DAILY P&amp;L <span>$500 target line</span></div>
+      <div class="chart-wrap">
+        <canvas id="pnlChart"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">OPEN POSITIONS <span id="posCount"></span></div>
+      <div id="positionsEl"><div class="loading">loading…</div></div>
+    </div>
+  </div>
+
+  <!-- Opportunities -->
+  <div class="card">
+    <div class="card-title">
+      TODAY'S OPPORTUNITIES — <span id="todayDate">{{ today }}</span>
+      <button onclick="refreshOpps()" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:3px 10px;border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:10px;">↺ REFRESH</button>
+    </div>
+    <div id="oppsEl"><div class="loading">scanning markets…</div></div>
+  </div>
+
+</div>
+
+<!-- Forecast detail modal -->
+<div class="modal-bg" id="modalBg" onclick="closeModal(event)">
+  <div class="modal" id="modalEl">
+    <button class="modal-close" onclick="document.getElementById('modalBg').classList.remove('open')">✕</button>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+<script>
+const TODAY = "{{ today }}";
+let pnlChart = null;
+
+// ── Clock ────────────────────────────────────────────────────────────────────
+function updateClock() {
+  document.getElementById('clockEl').textContent = new Date().toLocaleTimeString();
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Stats ────────────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats');
+    const d = await r.json();
+    if (d.error) { return; }
+
+    const fmt = v => (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
+    document.getElementById('statNet').textContent    = fmt(d.total_net);
+    document.getElementById('statNetSub').textContent = `gross $${d.total_gross.toFixed(2)} – $${d.total_fees.toFixed(2)} fees`;
+    document.getElementById('statAvg').textContent    = fmt(d.avg_daily);
+    document.getElementById('statAvgSub').textContent = `$${(d.total_fees / Math.max(d.days_traded,1)).toFixed(2)}/day in fees`;
+    document.getElementById('statWin').textContent    = d.win_rate + '%';
+    document.getElementById('statWinSub').textContent = `${d.win_days}W / ${d.loss_days}L`;
+    document.getElementById('statFees').textContent   = '$' + d.total_fees.toFixed(2);
+    document.getElementById('statFeesSub').textContent = d.days_traded ? `${(d.total_fees / (d.balance||1) * 100).toFixed(1)}% of deployed` : '—';
+
+    document.getElementById('statusBadge').textContent = 'LIVE';
+    document.getElementById('statusBadge').className   = 'status-badge status-live';
+
+    renderChart(d.daily);
+  } catch(e) { console.error('stats', e); }
+}
+
+// ── Daily P&L Chart ──────────────────────────────────────────────────────────
+function renderChart(daily) {
+  const ctx = document.getElementById('pnlChart').getContext('2d');
+  const labels = daily.map(d => d.date.slice(5));
+  const values = daily.map(d => d.pnl);
+
+  if (pnlChart) pnlChart.destroy();
+  pnlChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: values.map(v => v >= 0 ? '#3fb95033' : '#f8514933'),
+        borderColor:     values.map(v => v >= 0 ? '#3fb950' : '#f85149'),
+        borderWidth: 1,
+        borderRadius: 3,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        annotation: { annotations: {} },
+        tooltip: {
+          callbacks: {
+            label: ctx => (ctx.raw >= 0 ? '+' : '') + '$' + ctx.raw.toFixed(2)
+          }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#21262d' }, ticks: { color: '#7d8590', font: { family: 'monospace', size: 10 } } },
+        y: { grid: { color: '#21262d' }, ticks: { color: '#7d8590', font: { family: 'monospace', size: 10 }, callback: v => '$' + v } }
+      }
+    }
+  });
+
+  // Draw $500 target line
+  const target = 500;
+  const max = Math.max(...values, target);
+  // Add as annotation via plugin hack — draw manually
+  const origDraw = pnlChart.draw.bind(pnlChart);
+  pnlChart.draw = function() {
+    origDraw();
+    const area = pnlChart.chartArea;
+    const yScale = pnlChart.scales.y;
+    const yPx = yScale.getPixelForValue(target);
+    if (yPx >= area.top && yPx <= area.bottom) {
+      const ctx2 = pnlChart.ctx;
+      ctx2.save();
+      ctx2.setLineDash([4, 4]);
+      ctx2.strokeStyle = '#d2992266';
+      ctx2.lineWidth = 1;
+      ctx2.beginPath();
+      ctx2.moveTo(area.left, yPx);
+      ctx2.lineTo(area.right, yPx);
+      ctx2.stroke();
+      ctx2.fillStyle = '#d29922';
+      ctx2.font = '10px monospace';
+      ctx2.fillText('$500 target', area.right - 72, yPx - 4);
+      ctx2.restore();
+    }
+  };
+  pnlChart.draw();
+}
+
+// ── Positions ────────────────────────────────────────────────────────────────
+async function loadPositions() {
+  try {
+    const r = await fetch('/api/positions');
+    const d = await r.json();
+    const el = document.getElementById('positionsEl');
+    document.getElementById('posCount').textContent = d.positions?.length ? `${d.positions.length} open` : '';
+
+    if (!d.positions || d.positions.length === 0) {
+      el.innerHTML = '<div class="empty">No open positions</div>'; return;
+    }
+    el.innerHTML = d.positions.map(p => `
+      <div class="pos-row">
+        <div>
+          <div class="pos-ticker">${p.ticker || '—'}</div>
+          <div class="pos-meta">${p.position || 0} contracts</div>
+        </div>
+        <div class="stat-value green" style="font-size:16px">$${((p.value||0)/100).toFixed(2)}</div>
+      </div>
+    `).join('');
+  } catch(e) { console.error('positions', e); }
+}
+
+// ── Opportunities ────────────────────────────────────────────────────────────
+async function refreshOpps() {
+  const el = document.getElementById('oppsEl');
+  el.innerHTML = '<div class="loading">scanning ' + Object.keys({{cities|tojson}}).length + ' city markets…</div>';
+  try {
+    const r = await fetch('/api/opportunities?date=' + TODAY);
+    const d = await r.json();
+    renderOpps(d.opportunities || [], d.generated_at);
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Error loading opportunities — ' + e.message + '</div>';
+  }
+}
+
+function renderOpps(opps, generatedAt) {
+  const el = document.getElementById('oppsEl');
+  if (!opps.length) {
+    el.innerHTML = '<div class="empty">No opportunities found meeting edge criteria today.<br><span style="font-size:11px;color:var(--muted)">Try lowering MIN_EDGE in .env</span></div>';
+    return;
+  }
+  const ts = generatedAt ? new Date(generatedAt).toLocaleTimeString() : '';
+  el.innerHTML = `
+    <div style="color:var(--muted);font-size:10px;margin-bottom:12px">${opps.length} opportunities found · scanned at ${ts}</div>
+    <table class="opps-table">
+      <thead>
+        <tr>
+          <th>CITY</th><th>TYPE</th><th>RANGE</th>
+          <th>P(WIN)</th><th>MKT IMPLIED</th><th>EDGE</th>
+          <th>COST</th><th>ENSEMBLE</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${opps.map(o => `
+          <tr>
+            <td class="opp-city">${o.city}<br><span style="color:var(--muted);font-size:10px;font-weight:400">${o.city_name}</span></td>
+            <td><span class="type-pill">${o.type === 'adjacent_spread' ? 'SPREAD' : 'SINGLE'}</span></td>
+            <td class="opp-range">${o.range}</td>
+            <td class="green">${o.our_prob}%</td>
+            <td style="color:var(--muted)">${o.market_impl}%</td>
+            <td><span class="edge-pill ${o.strong ? 'edge-strong' : 'edge-normal'}">${o.edge > 0 ? '+' : ''}${o.edge}%</span></td>
+            <td>${o.cost_cents}¢</td>
+            <td style="color:var(--muted);font-size:11px">μ=${o.forecast_mean}°F σ=${o.forecast_std}°F<br>n=${o.ensemble_n}</td>
+            <td><button onclick="showForecast('${o.city}')" style="background:none;border:1px solid var(--border);color:var(--muted);padding:3px 8px;border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:10px;">detail →</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ── Forecast detail modal ────────────────────────────────────────────────────
+async function showForecast(cityKey) {
+  document.getElementById('modalBg').classList.add('open');
+  document.getElementById('modalContent').innerHTML = '<div class="loading">loading forecast…</div>';
+  try {
+    const r = await fetch(`/api/forecast/${cityKey}?date=${TODAY}`);
+    const d = await r.json();
+
+    const bins = (d.bins_5f || []).filter(b => b.prob > 0.5);
+    const maxProb = Math.max(...(d.bins_5f||[]).map(b=>b.prob), 1);
+    const histHtml = (d.bins_5f || []).map(b => {
+      const h = Math.max(4, (b.prob / maxProb) * 80);
+      const hl = b.low <= d.corrected_mean && d.corrected_mean < b.high;
+      return `<div class="hist-bar ${hl?'highlight':''}" style="height:${h}px" title="${b.low}–${b.high}°F: ${b.prob}%"></div>`;
+    }).join('');
+
+    const tempRange = d.bins_5f?.length
+      ? `${d.bins_5f[0].low}°F – ${d.bins_5f[d.bins_5f.length-1].high}°F`
+      : '—';
+
+    document.getElementById('modalContent').innerHTML = `
+      <div style="color:var(--muted);font-size:10px;letter-spacing:2px;margin-bottom:4px">FORECAST DETAIL</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:16px">${d.city_name} · ${d.date}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+        <div><div class="stat-label">ENSEMBLE MEAN</div><div class="stat-value blue" style="font-size:20px">${d.corrected_mean}°F</div></div>
+        <div><div class="stat-label">UNCERTAINTY (σ)</div><div class="stat-value yellow" style="font-size:20px">${d.std}°F</div></div>
+        <div><div class="stat-label">MEMBERS</div><div class="stat-value" style="font-size:20px">${d.ensemble_n}</div></div>
+      </div>
+      ${d.nws_high ? `<div style="color:var(--muted);font-size:12px;margin-bottom:16px">NWS official forecast: <span style="color:var(--text)">${d.nws_high}°F</span> · Bias correction: <span class="${d.bias_correction>0?'red':'green'}">${d.bias_correction>0?'+':''}${d.bias_correction}°F</span></div>` : ''}
+      <div style="color:var(--muted);font-size:10px;letter-spacing:1px;margin-bottom:8px">ENSEMBLE DISTRIBUTION (${tempRange})</div>
+      <div class="histogram">${histHtml}</div>
+      <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:10px;margin-top:4px">
+        ${(d.bins_5f||[]).filter((_,i)=>i%4===0).map(b=>`<span>${b.low}°</span>`).join('')}
+      </div>
+      <div style="margin-top:16px;color:var(--muted);font-size:10px;letter-spacing:1px">BIN PROBABILITIES (5°F bins)</div>
+      <div style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px">
+        ${(d.bins_5f||[]).filter(b=>b.prob>1).map(b=>`
+          <div style="background:${b.low<=d.corrected_mean&&d.corrected_mean<b.high?'#3fb95011':'#21262d'};border:1px solid ${b.low<=d.corrected_mean&&d.corrected_mean<b.high?'#3fb95044':'var(--border)'};border-radius:4px;padding:6px 10px;">
+            <div style="color:var(--muted);font-size:10px">${b.low}–${b.high}°F</div>
+            <div style="font-size:14px;font-weight:700;color:${b.prob>30?'var(--green)':b.prob>15?'var(--blue)':'var(--muted)'}">${b.prob}%</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  } catch(e) {
+    document.getElementById('modalContent').innerHTML = '<div class="empty">Failed to load forecast</div>';
+  }
+}
+
+function closeModal(e) {
+  if (e.target === document.getElementById('modalBg'))
+    document.getElementById('modalBg').classList.remove('open');
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+loadStats();
+loadPositions();
+refreshOpps();
+
+// Auto-refresh every 5 minutes
+setInterval(() => { loadStats(); loadPositions(); }, 300_000);
+</script>
+</body>
+</html>
