@@ -300,6 +300,13 @@ async function loadScanner() {
     const d = await r.json();
     const el    = document.getElementById('statScanner');
     const elSub = document.getElementById('statScannerSub');
+    // Update header mode label
+    const modeLabel = document.getElementById('modeLabel');
+    if (modeLabel) {
+      modeLabel.textContent = d.auto_execute ? 'LIVE' : 'DRY RUN';
+      modeLabel.style.background = d.auto_execute ? '#1a7f37' : '';
+    }
+
     if (d.goal_hit) {
       el.textContent    = 'GOAL HIT';
       el.className      = 'stat-value yellow';
