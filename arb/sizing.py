@@ -31,6 +31,7 @@ MAX_PCT_BANKROLL  = float(os.getenv("MAX_PCT_BANKROLL",  "0.05"))  # max 5% per 
 MAX_TOTAL_DEPLOY  = float(os.getenv("MAX_TOTAL_DEPLOY",  "0.40"))  # max 40% of bankroll at risk
 MIN_CONTRACTS     = int(os.getenv("MIN_CONTRACTS",       "1"))
 MAX_CONTRACTS     = int(os.getenv("MAX_CONTRACTS",       "500"))
+MIN_TRADE_COST    = float(os.getenv("MIN_TRADE_COST",    "0.25"))  # skip trades worth less than $0.25
 
 
 def kelly_contracts(
@@ -108,7 +109,12 @@ def allocate(
         if n <= 0:
             continue
 
-        deployed += n * cost_per_contract
+        total_cost = n * cost_per_contract
+        if total_cost < MIN_TRADE_COST:
+            log.info(f"SKIP {opp.city_key}: trade too small (${total_cost:.2f} < ${MIN_TRADE_COST:.2f} min)")
+            continue
+
+        deployed += total_cost
         allocations.append((opp, n))
         log.info(
             f"ALLOCATE {'[CONS] ' if conservative else ''}{opp.city_key} {opp.trade_type}: {n} contracts "
