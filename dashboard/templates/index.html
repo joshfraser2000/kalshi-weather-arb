@@ -153,7 +153,7 @@
   <!-- Chart + Positions -->
   <div class="two-col">
     <div class="card">
-      <div class="card-title">DAILY P&amp;L <span>$500 target line</span></div>
+      <div class="card-title">DAILY P&amp;L <span>$3 daily goal line</span></div>
       <div class="chart-wrap">
         <canvas id="pnlChart"></canvas>
       </div>
@@ -267,7 +267,7 @@ function renderChart(daily) {
   });
 
   // Draw $100 daily goal line
-  const target = 100;
+  const target = 3;
   const origDraw = pnlChart.draw.bind(pnlChart);
   pnlChart.draw = function() {
     origDraw();
@@ -286,7 +286,7 @@ function renderChart(daily) {
       ctx2.stroke();
       ctx2.fillStyle = '#d29922';
       ctx2.font = '10px monospace';
-      ctx2.fillText('$100 goal', area.right - 60, yPx - 4);
+      ctx2.fillText('$3 goal', area.right - 48, yPx - 4);
       ctx2.restore();
     }
   };
