@@ -308,9 +308,9 @@ async function loadScanner() {
     }
 
     if (d.goal_hit) {
-      el.textContent    = 'GOAL HIT';
+      el.textContent    = 'CONSERVATIVE';
       el.className      = 'stat-value yellow';
-      elSub.textContent = `$${d.daily_pnl.toFixed(2)} earned today`;
+      elSub.textContent = `$${d.daily_pnl.toFixed(2)} earned · strong trades only, half sizing`;
     } else if (!d.auto_execute) {
       el.textContent    = 'MANUAL';
       el.className      = 'stat-value';

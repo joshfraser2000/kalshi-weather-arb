@@ -191,10 +191,19 @@ def _run_scan(execute: bool = False) -> dict:
     _cache_set(cache_key, result)
 
     if execute and all_opps and not illiquid:
-        daily_pnl = _get_daily_pnl()
-        if daily_pnl >= DAILY_PROFIT_GOAL:
-            log.info(f"Daily goal ${DAILY_PROFIT_GOAL:.0f} already reached (${daily_pnl:.2f}). Skipping execution.")
+        daily_pnl    = _get_daily_pnl()
+        conservative = daily_pnl >= DAILY_PROFIT_GOAL
+        if conservative:
+            # Goal hit — switch to conservative mode: only strong-edge trades, half sizing
+            strong_opps = [o for o in all_opps if o.get("strong")]
+            log.info(
+                f"Daily goal ${DAILY_PROFIT_GOAL:.0f} reached (${daily_pnl:.2f}). "
+                f"Conservative mode — {len(strong_opps)} strong opp(s) only."
+            )
             _scanner_state["goal_hit"] = True
+            if strong_opps:
+                results = _execute_opportunities(strong_opps, kalshi, conservative=True)
+                _scanner_state["trades_today"] += sum(1 for r in results if "error" not in r.get("status", ""))
         else:
             log.info(f"Daily P&L: ${daily_pnl:.2f} / ${DAILY_PROFIT_GOAL:.0f} goal. Executing {len(all_opps)} opp(s).")
             results = _execute_opportunities(all_opps, kalshi)
@@ -363,7 +372,7 @@ def api_opportunities():
     return jsonify(result)
 
 
-def _execute_opportunities(opps: list[dict], kalshi) -> list[dict]:
+def _execute_opportunities(opps: list[dict], kalshi, conservative: bool = False) -> list[dict]:
     """Place live orders for a list of opportunity dicts. Returns execution log."""
     balance  = kalshi.get_balance()
     opp_objs = []
@@ -384,7 +393,7 @@ def _execute_opportunities(opps: list[dict], kalshi) -> list[dict]:
                               else float(o["range"].split("-")[1].rstrip("F"))),
         )
         opp_objs.append(obj)
-    allocs  = allocate(opp_objs, balance)
+    allocs  = allocate(opp_objs, balance, conservative=conservative)
     results = []
     for opp_obj, n in allocs:
         try:

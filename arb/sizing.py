@@ -71,15 +71,24 @@ def kelly_contracts(
 def allocate(
     opportunities: list[TradeOpportunity],
     bankroll:      float,
+    conservative:  bool = False,
 ) -> list[tuple[TradeOpportunity, int]]:
     """
     Allocate contracts across all opportunities, respecting MAX_TOTAL_DEPLOY.
 
+    If conservative=True (daily goal already hit), halves position sizes and
+    caps total deployment at 20% of bankroll instead of 40%.
+
     Returns list of (opportunity, n_contracts) sorted by edge descending.
     """
-    max_deploy   = bankroll * MAX_TOTAL_DEPLOY
-    deployed     = 0.0
-    allocations  = []
+    kelly_mult  = 0.5 if conservative else 1.0
+    deploy_cap  = 0.20 if conservative else MAX_TOTAL_DEPLOY
+    max_deploy  = bankroll * deploy_cap
+    deployed    = 0.0
+    allocations = []
+
+    if conservative:
+        log.info("Allocating in CONSERVATIVE mode — half sizing, 20% deploy cap")
 
     # Best edge first
     for opp in sorted(opportunities, key=lambda o: o.edge, reverse=True):
@@ -88,6 +97,7 @@ def allocate(
             break
 
         n = kelly_contracts(opp, bankroll)
+        n = max(1, int(n * kelly_mult))
         if n <= 0:
             continue
 
@@ -101,7 +111,7 @@ def allocate(
         deployed += n * cost_per_contract
         allocations.append((opp, n))
         log.info(
-            f"ALLOCATE {opp.city_key} {opp.trade_type}: {n} contracts "
+            f"ALLOCATE {'[CONS] ' if conservative else ''}{opp.city_key} {opp.trade_type}: {n} contracts "
             f"× {opp.cost_cents}¢ = ${n * cost_per_contract:.2f} | "
             f"edge={opp.edge:+.1%} | deployed={deployed:.2f}/{max_deploy:.2f}"
         )
