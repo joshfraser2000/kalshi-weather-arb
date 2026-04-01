@@ -219,6 +219,11 @@ class KalshiClient:
         r.raise_for_status()
         return r.json().get("fills", [])
 
+    def get_orders(self, status: str = "resting") -> list[dict]:
+        r = self._get(f"/portfolio/orders?status={status}")
+        r.raise_for_status()
+        return r.json().get("orders", [])
+
     def close(self) -> None:
         self._client.close()
 

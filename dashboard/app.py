@@ -441,11 +441,12 @@ def api_positions():
     try:
         kalshi    = get_kalshi()
         positions = kalshi.get_positions()
+        orders    = kalshi.get_orders(status="resting")
         balance   = kalshi.get_balance()
         fills     = kalshi.get_fills()[-50:]
-        return jsonify({"positions": positions, "balance": balance, "fills": fills})
+        return jsonify({"positions": positions, "orders": orders, "balance": balance, "fills": fills})
     except Exception as e:
-        return jsonify({"error": str(e), "positions": [], "balance": 0, "fills": []})
+        return jsonify({"error": str(e), "positions": [], "orders": [], "balance": 0, "fills": []})
 
 
 @app.route("/api/stats")
@@ -473,6 +474,11 @@ def api_stats():
         win_days    = sum(1 for v in daily.values() if v > 0)
         daily_list  = [{"date": d, "pnl": round(v, 2)} for d, v in sorted(daily.items())]
 
+        # Per-trade win/loss (only settled fills with non-zero profit)
+        settled = [f for f in fills if (f.get("profit") or 0) != 0]
+        win_trades  = sum(1 for f in settled if (f.get("profit") or 0) > 0)
+        loss_trades = sum(1 for f in settled if (f.get("profit") or 0) < 0)
+
         return jsonify({
             "balance":       round(balance, 2),
             "total_gross":   round(total_gross, 2),
@@ -486,6 +492,9 @@ def api_stats():
             "loss_days":     days_traded - win_days,
             "win_rate":      round(win_days / days_traded * 100, 1) if days_traded else 0,
             "avg_daily":     round((total_gross - total_fees) / days_traded, 2) if days_traded else 0,
+            "win_trades":    win_trades,
+            "loss_trades":   loss_trades,
+            "trade_win_rate": round(win_trades / (win_trades + loss_trades) * 100, 1) if (win_trades + loss_trades) else 0,
             "daily":         daily_list,
         })
     except Exception as e:

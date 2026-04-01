@@ -207,8 +207,8 @@ async function loadStats() {
     const fmt = v => (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
     document.getElementById('statNet').textContent    = fmt(d.total_net);
     document.getElementById('statNetSub').textContent = `gross $${d.total_gross.toFixed(2)} – $${d.total_fees.toFixed(2)} fees`;
-    document.getElementById('statWin').textContent    = d.win_rate + '%';
-    document.getElementById('statWinSub').textContent = `${d.win_days}W / ${d.loss_days}L · avg ${fmt(d.avg_daily)}/day`;
+    document.getElementById('statWin').textContent    = d.trade_win_rate + '%';
+    document.getElementById('statWinSub').textContent = `${d.win_trades}W / ${d.loss_trades}L trades · avg ${fmt(d.avg_daily)}/day`;
 
     // Today's P&L vs $100 goal
     const todayPnl  = d.today_pnl || 0;
@@ -338,20 +338,36 @@ async function loadPositions() {
     const r = await fetch('/api/positions');
     const d = await r.json();
     const el = document.getElementById('positionsEl');
-    document.getElementById('posCount').textContent = d.positions?.length ? `${d.positions.length} open` : '';
+    const positions = d.positions || [];
+    const orders    = d.orders    || [];
+    const total = positions.length + orders.length;
+    document.getElementById('posCount').textContent = total ? `${total} open` : '';
 
-    if (!d.positions || d.positions.length === 0) {
+    if (total === 0) {
       el.innerHTML = '<div class="empty">No open positions</div>'; return;
     }
-    el.innerHTML = d.positions.map(p => `
+
+    const posHtml = positions.map(p => `
       <div class="pos-row">
         <div>
           <div class="pos-ticker">${p.ticker || '—'}</div>
-          <div class="pos-meta">${p.position || 0} contracts</div>
+          <div class="pos-meta">${p.position || 0} contracts · filled</div>
         </div>
         <div class="stat-value green" style="font-size:16px">$${((p.value||0)/100).toFixed(2)}</div>
       </div>
     `).join('');
+
+    const ordHtml = orders.map(o => `
+      <div class="pos-row">
+        <div>
+          <div class="pos-ticker">${o.ticker || '—'}</div>
+          <div class="pos-meta">${o.remaining_count || o.count || 0} contracts · resting @ ${o.yes_price || o.no_price || '?'}¢</div>
+        </div>
+        <div class="stat-value yellow" style="font-size:16px">RESTING</div>
+      </div>
+    `).join('');
+
+    el.innerHTML = posHtml + ordHtml;
   } catch(e) { console.error('positions', e); }
 }
 
