@@ -227,6 +227,17 @@ def find_opportunities(
         if our_prob < MIN_PROB:
             continue
 
+        # NWS sanity check: don't trade against the official forecast
+        if forecast.nws_high is not None:
+            nws_above = forecast.nws_high >= threshold
+            model_above = side == "yes"
+            if nws_above != model_above:
+                log.info(
+                    f"  VETO {forecast.city_key} threshold {threshold:.0f}°F: "
+                    f"NWS says {forecast.nws_high:.0f}°F but model wants {side.upper()}"
+                )
+                continue
+
         opp = TradeOpportunity(
             city_key       = forecast.city_key,
             trade_type     = "single_bin",

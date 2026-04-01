@@ -59,11 +59,11 @@ class ForecastResult:
     ):
         self.city_key        = city_key
         self.target_date     = target_date
-        self.members         = members
-        self.mean            = statistics.mean(members)
-        self.std             = statistics.stdev(members) if len(members) > 1 else 3.0
+        self.members         = [m - bias_correction for m in members]  # apply bias to every member
+        self.mean            = statistics.mean(self.members)
+        self.std             = statistics.stdev(self.members) if len(self.members) > 1 else 3.0
         self.bias_correction = bias_correction
-        self.corrected_mean  = self.mean - bias_correction   # subtract systematic warm/cold bias
+        self.corrected_mean  = self.mean   # already corrected
         self.nws_high        = nws_high
 
     def prob_in_range(self, low: float, high: float) -> float:
