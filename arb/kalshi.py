@@ -67,8 +67,9 @@ class KalshiClient:
     def _sign(self, method: str, path: str) -> dict:
         """Generate RSA-signed auth headers for Kalshi API key auth."""
         ts = str(int(time.time() * 1000))
-        # Full path must include /trade-api/v2 prefix
-        full_path = "/trade-api/v2" + path if not path.startswith("/trade-api") else path
+        # Full path must include /trade-api/v2 prefix, strip query string before signing
+        clean_path = path.split("?")[0]
+        full_path  = "/trade-api/v2" + clean_path if not clean_path.startswith("/trade-api") else clean_path
         msg = (ts + method.upper() + full_path).encode()
         sig = self._private_key.sign(
             msg,
