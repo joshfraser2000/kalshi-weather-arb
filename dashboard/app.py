@@ -227,6 +227,8 @@ def _scanner_loop() -> None:
         f"window={SCAN_START_ET}–{SCAN_END_ET} ET, "
         f"auto_execute={AUTO_EXECUTE}, goal=${DAILY_PROFIT_GOAL:.0f}"
     )
+    # Delay first scan to avoid hammering APIs immediately on (re)deploy
+    time.sleep(90)
     last_run: datetime | None = None
 
     while True:

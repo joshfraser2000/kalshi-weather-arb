@@ -24,6 +24,9 @@ from arb.logger import get_logger
 
 log = get_logger("weather")
 
+# Limit concurrent Open-Meteo requests to avoid 429 rate limiting
+_OPEN_METEO_SEM = asyncio.Semaphore(3)
+
 ENSEMBLE_URL  = "https://ensemble-api.open-meteo.com/v1/ensemble"
 FORECAST_URL  = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL   = "https://archive-api.open-meteo.com/v1/archive"
@@ -101,6 +104,16 @@ async def _fetch_ensemble(
     Pull GFS + ECMWF + ICON ensemble members from Open-Meteo.
     Returns a flat list of daily-high temperature values (°F) for target_date.
     """
+    async with _OPEN_METEO_SEM:
+        return await _fetch_ensemble_inner(lat, lon, target_date, client)
+
+
+async def _fetch_ensemble_inner(
+    lat: float,
+    lon: float,
+    target_date: date,
+    client: httpx.AsyncClient,
+) -> list[float]:
     members: list[float] = []
 
     # ── GFS (31 members) ─────────────────────────────────────────────────────
