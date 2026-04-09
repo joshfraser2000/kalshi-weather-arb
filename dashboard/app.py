@@ -46,6 +46,7 @@ DAILY_PROFIT_GOAL   = float(os.getenv("DAILY_PROFIT_GOAL", "100"))   # stop trad
 SCAN_INTERVAL_MINS  = int(os.getenv("SCAN_INTERVAL_MINS",  "30"))    # how often to scan (minutes)
 SCAN_START_ET       = int(os.getenv("SCAN_START_ET",       "9"))     # 9 AM ET — markets open
 SCAN_END_ET         = int(os.getenv("SCAN_END_ET",         "15"))    # 3 PM ET — markets thin out
+MAX_BID_ASK_SPREAD  = int(os.getenv("MAX_BID_ASK_SPREAD",  "35"))    # max bid-ask spread in cents to consider liquid
 CACHE_TTL_SECONDS   = 300
 
 ET = ZoneInfo("America/New_York")
@@ -148,7 +149,7 @@ def _run_scan(execute: bool = False) -> dict:
             raw        = kalshi.get_markets_for_series(series, status="open")
             parsed_raw = [p for m in raw if (p := parse_bin_market(m))]
             parsed_raw += [p for m in raw if (p := parse_threshold_market(m))]
-            parsed     = enrich_with_orderbook_prices(parsed_raw, kalshi)
+            parsed     = enrich_with_orderbook_prices(parsed_raw, kalshi, max_spread=MAX_BID_ASK_SPREAD)
             total_raw    += len(parsed_raw)
             total_liquid += len(parsed)
             opps = find_opportunities(forecast, parsed)
@@ -317,7 +318,7 @@ def api_opportunities():
             raw        = kalshi.get_markets_for_series(series, status="open")
             parsed_raw = [p for m in raw if (p := parse_bin_market(m))]
             parsed_raw += [p for m in raw if (p := parse_threshold_market(m))]
-            parsed     = enrich_with_orderbook_prices(parsed_raw, kalshi)
+            parsed     = enrich_with_orderbook_prices(parsed_raw, kalshi, max_spread=MAX_BID_ASK_SPREAD)
             total_raw    += len(parsed_raw)
             total_liquid += len(parsed)
             if raw:
@@ -547,6 +548,26 @@ def api_forecast(city_key: str):
     }
     _cache_set(cache_key, result)
     return jsonify(result)
+
+
+@app.route("/api/trades")
+def api_trades():
+    """Trade history from Kalshi fills — consumed by the main trading dashboard."""
+    try:
+        kalshi = get_kalshi()
+        fills  = kalshi.get_fills()
+        trades = []
+        for f in fills:
+            pnl = ((f.get("profit") or 0) - (f.get("fees") or 0)) / 100
+            trades.append({
+                "date":        (f.get("created_time") or "")[:10],
+                "description": f.get("market_title") or f.get("ticker") or "Kalshi trade",
+                "pnl":         round(pnl, 2),
+            })
+        trades.sort(key=lambda x: x["date"], reverse=True)
+        return jsonify(trades)
+    except Exception as e:
+        return jsonify([])
 
 
 # ── Main page ─────────────────────────────────────────────────────────────────
