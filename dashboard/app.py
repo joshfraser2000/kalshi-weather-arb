@@ -147,6 +147,8 @@ def _run_scan(execute: bool = False) -> dict:
         series = CITIES[city_key]["kalshi_series"]
         try:
             raw        = kalshi.get_markets_for_series(series, status="open")
+            if raw and city_key == "HOU":
+                log.debug(f"[TICKER SAMPLE] {[m.get('ticker','?') for m in raw[:4]]}")
             parsed_raw = [p for m in raw if (p := parse_bin_market(m))]
             parsed_raw += [p for m in raw if (p := parse_threshold_market(m))]
             parsed     = enrich_with_orderbook_prices(parsed_raw, kalshi, max_spread=MAX_BID_ASK_SPREAD)
