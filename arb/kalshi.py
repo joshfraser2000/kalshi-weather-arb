@@ -347,6 +347,7 @@ def enrich_with_orderbook_prices(
         ask = m.get("yes_ask")
         bid = m.get("yes_bid")
         if ask is not None and bid is not None and (ask - bid) > max_spread:
+            log.debug(f"[SPREAD FILTER] {m['ticker']} ask={ask} bid={bid} spread={ask-bid} > {max_spread} — dropped")
             continue
         enriched.append(m)
     return enriched
