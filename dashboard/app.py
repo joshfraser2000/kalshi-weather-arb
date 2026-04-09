@@ -585,14 +585,14 @@ def index():
     return render_template("index.html", today=today, cities=list(CITIES.keys()))
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Start background scanner (runs under both gunicorn and direct python) ─────
+_scanner_thread = threading.Thread(target=_scanner_loop, daemon=True, name="scanner")
+_scanner_thread.start()
+
+
+# ── Entry point (direct python only) ─────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("DASHBOARD_PORT", "5050"))
-
-    # Start background scanner thread
-    t = threading.Thread(target=_scanner_loop, daemon=True, name="scanner")
-    t.start()
-
     log.info(f"Dashboard running at http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
