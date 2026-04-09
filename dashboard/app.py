@@ -46,7 +46,7 @@ DAILY_PROFIT_GOAL   = float(os.getenv("DAILY_PROFIT_GOAL", "100"))   # stop trad
 SCAN_INTERVAL_MINS  = int(os.getenv("SCAN_INTERVAL_MINS",  "30"))    # how often to scan (minutes)
 SCAN_START_ET       = int(os.getenv("SCAN_START_ET",       "9"))     # 9 AM ET — markets open
 SCAN_END_ET         = int(os.getenv("SCAN_END_ET",         "15"))    # 3 PM ET — markets thin out
-MAX_BID_ASK_SPREAD  = int(os.getenv("MAX_BID_ASK_SPREAD",  "35"))    # max bid-ask spread in cents to consider liquid
+MAX_BID_ASK_SPREAD  = int(os.getenv("MAX_BID_ASK_SPREAD",  "55"))    # max bid-ask spread in cents to consider liquid
 CACHE_TTL_SECONDS   = 300
 
 ET = ZoneInfo("America/New_York")
@@ -121,7 +121,7 @@ def _run_scan(execute: bool = False) -> dict:
     """
     from arb.kalshi import parse_bin_market, parse_threshold_market, enrich_with_orderbook_prices
 
-    target    = str(date.today() + timedelta(days=1))
+    target    = str(date.today())
     cache_key = f"opps:{target}"
 
     # Invalidate cache so we get fresh data
@@ -147,8 +147,6 @@ def _run_scan(execute: bool = False) -> dict:
         series = CITIES[city_key]["kalshi_series"]
         try:
             raw        = kalshi.get_markets_for_series(series, status="open")
-            if raw and city_key == "HOU":
-                log.debug(f"[TICKER SAMPLE] {[m.get('ticker','?') for m in raw[:4]]}")
             parsed_raw = [p for m in raw if (p := parse_bin_market(m))]
             parsed_raw += [p for m in raw if (p := parse_threshold_market(m))]
             parsed     = enrich_with_orderbook_prices(parsed_raw, kalshi, max_spread=MAX_BID_ASK_SPREAD)
@@ -416,7 +414,7 @@ def api_execute():
         return jsonify({"error": "Kalshi not configured"}), 400
     try:
         kalshi    = get_kalshi()
-        target    = str(date.today() + timedelta(days=1))
+        target    = str(date.today())
         cache_key = f"opps:{target}"
         cached    = _cache_get(cache_key)
         opps      = cached["opportunities"] if cached else []
@@ -581,7 +579,7 @@ def health():
 
 @app.route("/")
 def index():
-    today = str(date.today() + timedelta(days=1))
+    today = str(date.today())
     return render_template("index.html", today=today, cities=list(CITIES.keys()))
 
 

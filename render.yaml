@@ -28,7 +28,7 @@ services:
       - key: MAX_SPREAD
         value: "5"
       - key: MAX_BID_ASK_SPREAD
-        value: "35"
+        value: "55"
       - key: KELLY_FRACTION
         value: "0.25"
       - key: MAX_PCT_BANKROLL
