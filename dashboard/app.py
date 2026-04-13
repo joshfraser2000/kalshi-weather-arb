@@ -442,6 +442,48 @@ def api_scanner():
     return jsonify(state)
 
 
+@app.route("/api/close", methods=["POST"])
+def api_close():
+    """Sell (close) an open position by ticker at current market price."""
+    data   = request.get_json(force=True)
+    ticker = data.get("ticker")
+    if not ticker:
+        return jsonify({"error": "ticker required"}), 400
+    try:
+        kalshi    = get_kalshi()
+        positions = kalshi.get_positions()
+        pos = next(
+            (p for p in positions
+             if (p.get("market_ticker") or p.get("ticker")) == ticker),
+            None,
+        )
+        if not pos:
+            return jsonify({"error": f"No open position for {ticker}"}), 404
+
+        contracts  = pos.get("position") or 0
+        if contracts == 0:
+            return jsonify({"error": "Position is already flat"}), 400
+
+        last_price = pos.get("last_price") or 50   # YES price in cents
+        if contracts > 0:
+            # Long YES → sell YES slightly below last YES price to ensure fill
+            side  = "yes"
+            price = max(1, last_price - 1)
+            count = contracts
+        else:
+            # Long NO → sell NO; NO price = 100 - YES price
+            side  = "no"
+            price = max(1, (100 - last_price) - 1)
+            count = abs(contracts)
+
+        order = kalshi.place_order(ticker, side, "sell", count, price)
+        log.info(f"Closed position: {ticker} {side.upper()} x{count} @ {price}¢")
+        return jsonify({"ok": True, "ticker": ticker, "side": side, "count": count, "price": price, "order": order})
+    except Exception as e:
+        log.error(f"/api/close error: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/positions")
 def api_positions():
     try:
