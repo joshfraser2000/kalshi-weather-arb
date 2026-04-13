@@ -554,21 +554,69 @@ def api_forecast(city_key: str):
 
 @app.route("/api/trades")
 def api_trades():
-    """Trade history from Kalshi fills — consumed by the main trading dashboard."""
+    """Trade history from Kalshi fills — consumed by the main trading dashboard.
+
+    Kalshi only creates settlement fills for WINNING contracts; losing contracts
+    expire worthless with no record.  We must compute true P&L by grouping each
+    ticker's buy-fills (cost) against any settlement payout (profit):
+        net = settlement_payout - amount_paid - fees
+    A position with no settlement fill is a total loss (net = -amount_paid).
+    """
     try:
         kalshi = get_kalshi()
         fills  = kalshi.get_fills()
-        trades = []
+
+        # Keyed by ticker; accumulate cost, payout, and fees separately
+        by_ticker: dict[str, dict] = {}
+
         for f in fills:
-            pnl = ((f.get("profit") or 0) - (f.get("fees") or 0)) / 100
+            ticker = f.get("ticker") or "unknown"
+            if ticker not in by_ticker:
+                by_ticker[ticker] = {
+                    "description": f.get("market_title") or ticker,
+                    "date":        (f.get("created_time") or "")[:10],
+                    "cost":        0.0,   # dollars paid to enter
+                    "payout":      0.0,   # settlement dollars received
+                    "fees":        0.0,
+                }
+
+            entry  = by_ticker[ticker]
+            profit = (f.get("profit") or 0)
+            fees   = (f.get("fees")   or 0)
+
+            # Determine price paid for this fill (yes_price or no_price, in cents)
+            side  = (f.get("side") or "yes").lower()
+            price = f.get("yes_price") if side == "yes" else f.get("no_price")
+            if price is None:
+                price = f.get("yes_price") or f.get("no_price") or 0
+            count = f.get("count") or 0
+
+            if profit > 0:
+                # Settlement fill: we received money
+                entry["payout"] += profit / 100
+                entry["fees"]   += fees   / 100
+            elif price and count:
+                # Buy fill: we spent money (profit field is 0 here)
+                entry["cost"] += (price * count) / 100
+                entry["fees"] += fees / 100
+                # Keep the buy date as the trade date
+                buy_date = (f.get("created_time") or "")[:10]
+                if buy_date:
+                    entry["date"] = buy_date
+
+        trades = []
+        for entry in by_ticker.values():
+            net_pnl = entry["payout"] - entry["cost"] - entry["fees"]
             trades.append({
-                "date":        (f.get("created_time") or "")[:10],
-                "description": f.get("market_title") or f.get("ticker") or "Kalshi trade",
-                "pnl":         round(pnl, 2),
+                "date":        entry["date"],
+                "description": entry["description"],
+                "pnl":         round(net_pnl, 2),
             })
+
         trades.sort(key=lambda x: x["date"], reverse=True)
         return jsonify(trades)
     except Exception as e:
+        log.error(f"/api/trades error: {e}", exc_info=True)
         return jsonify([])
 
 
