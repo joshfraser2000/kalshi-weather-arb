@@ -452,28 +452,28 @@ def api_close():
     try:
         kalshi    = get_kalshi()
         positions = kalshi.get_positions()
-        pos = next(
-            (p for p in positions
-             if (p.get("market_ticker") or p.get("ticker")) == ticker),
-            None,
-        )
+        pos = next((p for p in positions if p.get("ticker") == ticker), None)
         if not pos:
             return jsonify({"error": f"No open position for {ticker}"}), 404
 
-        contracts  = pos.get("position") or 0
+        contracts = int(float(pos.get("position_fp") or 0))
         if contracts == 0:
             return jsonify({"error": "Position is already flat"}), 400
 
-        last_price = pos.get("last_price") or 50   # YES price in cents
+        # Fetch current market to get live yes_bid / yes_ask for pricing
+        market     = kalshi.get_market(ticker)
+        yes_bid    = market.get("yes_bid") or 50
+        yes_ask    = market.get("yes_ask") or 50
+
         if contracts > 0:
-            # Long YES → sell YES slightly below last YES price to ensure fill
+            # Long YES → sell YES at yes_bid (what buyers will pay)
             side  = "yes"
-            price = max(1, last_price - 1)
+            price = max(1, yes_bid)
             count = contracts
         else:
-            # Long NO → sell NO; NO price = 100 - YES price
+            # Long NO → sell NO; NO bid = 100 - YES ask
             side  = "no"
-            price = max(1, (100 - last_price) - 1)
+            price = max(1, 100 - yes_ask)
             count = abs(contracts)
 
         order = kalshi.place_order(ticker, side, "sell", count, price)
@@ -490,21 +490,8 @@ def api_positions():
         kalshi  = get_kalshi()
         all_pos = kalshi.get_positions()
 
-        # Log the field names from the first position so we can see the real API structure
-        if all_pos:
-            log.info(f"Position fields: {list(all_pos[0].keys())}")
-            log.info(f"First position sample: {all_pos[0]}")
-
-        # Keep any position that is non-zero by any quantity field Kalshi might use
-        def _is_open(p):
-            return (
-                (p.get("position")          or 0) != 0 or
-                (p.get("market_exposure")   or 0) >  0 or
-                (p.get("total_traded_cost") or 0) >  0 or
-                (p.get("resting_orders_count") or 0) >  0
-            )
-
-        positions = [p for p in all_pos if _is_open(p)]
+        # Real field name is position_fp (fixed-point contract count); non-zero = open
+        positions = [p for p in all_pos if float(p.get("position_fp") or 0) != 0]
         orders    = kalshi.get_orders(status="resting")
         balance   = kalshi.get_balance()
         fills     = kalshi.get_fills()[-50:]
@@ -590,18 +577,15 @@ def api_stats():
         balance = kalshi.get_balance()   # cash balance only
 
         # Add mark-to-market value of open positions to get true portfolio value.
-        # For each position: if long YES, value = last_price * contracts / 100
-        #                    if long NO,  value = (100 - last_price) * contracts / 100
+        # market_exposure_dollars = max payout; use as proxy for current value.
         portfolio_value = balance
         try:
             positions = kalshi.get_positions()
             for p in positions:
-                contracts  = p.get("position") or 0
-                last_price = p.get("last_price") or 50   # YES price in cents
-                if contracts > 0:
-                    portfolio_value += contracts * last_price / 100
-                elif contracts < 0:
-                    portfolio_value += abs(contracts) * (100 - last_price) / 100
+                contracts = float(p.get("position_fp") or 0)
+                if contracts != 0:
+                    # market_exposure_dollars is the max payout in dollars
+                    portfolio_value += float(p.get("market_exposure_dollars") or 0)
         except Exception:
             pass  # fall back to cash-only if positions unavailable
 

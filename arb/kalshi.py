@@ -217,6 +217,12 @@ class KalshiClient:
         # Kalshi API v2 uses "market_positions"; v1 used "positions"
         return data.get("market_positions") or data.get("positions") or []
 
+    def get_market(self, ticker: str) -> dict:
+        """Fetch a single market by ticker — used for current pricing."""
+        r = self._get(f"/markets/{ticker}")
+        r.raise_for_status()
+        return r.json().get("market", r.json())
+
     def get_fills(self) -> list[dict]:
         r = self._get("/portfolio/fills")
         r.raise_for_status()
