@@ -213,7 +213,9 @@ class KalshiClient:
     def get_positions(self) -> list[dict]:
         r = self._get("/portfolio/positions")
         r.raise_for_status()
-        return r.json().get("positions", [])
+        data = r.json()
+        # Kalshi API v2 uses "market_positions"; v1 used "positions"
+        return data.get("market_positions") or data.get("positions") or []
 
     def get_fills(self) -> list[dict]:
         r = self._get("/portfolio/fills")

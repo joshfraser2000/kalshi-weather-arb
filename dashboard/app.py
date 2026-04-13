@@ -529,7 +529,23 @@ def api_stats():
     try:
         kalshi  = get_kalshi()
         fills   = kalshi.get_fills()
-        balance = kalshi.get_balance()
+        balance = kalshi.get_balance()   # cash balance only
+
+        # Add mark-to-market value of open positions to get true portfolio value.
+        # For each position: if long YES, value = last_price * contracts / 100
+        #                    if long NO,  value = (100 - last_price) * contracts / 100
+        portfolio_value = balance
+        try:
+            positions = kalshi.get_positions()
+            for p in positions:
+                contracts  = p.get("position") or 0
+                last_price = p.get("last_price") or 50   # YES price in cents
+                if contracts > 0:
+                    portfolio_value += contracts * last_price / 100
+                elif contracts < 0:
+                    portfolio_value += abs(contracts) * (100 - last_price) / 100
+        except Exception:
+            pass  # fall back to cash-only if positions unavailable
 
         pnl_data    = _compute_trade_pnl(fills)
         total_net   = pnl_data["total_net"]
@@ -549,7 +565,8 @@ def api_stats():
                          if e["cost"] > 0 and (e["payout"] - e["cost"] - e["fees"]) <= 0)
 
         return jsonify({
-            "balance":        round(balance, 2),
+            "balance":        round(portfolio_value, 2),   # total: cash + open positions
+            "cash_balance":   round(balance, 2),
             "total_gross":    round(total_net + total_fees, 2),
             "total_fees":     round(total_fees, 2),
             "total_net":      round(total_net, 2),
