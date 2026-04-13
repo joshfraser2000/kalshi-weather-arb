@@ -97,16 +97,10 @@ def _cache_set(key: str, data):
 def _get_daily_pnl() -> float:
     """Return today's net P&L in dollars from Kalshi fills."""
     try:
-        kalshi = get_kalshi()
-        fills  = kalshi.get_fills()
-        today  = str(date.today())
-        total  = 0.0
-        for f in fills:
-            if f.get("created_time", "")[:10] == today:
-                pnl = (f.get("profit", 0) or 0) / 100
-                fee = (f.get("fees",   0) or 0) / 100
-                total += pnl - fee
-        return total
+        kalshi   = get_kalshi()
+        fills    = kalshi.get_fills()
+        pnl_data = _compute_trade_pnl(fills)
+        return pnl_data["daily"].get(str(date.today()), 0.0)
     except Exception:
         return 0.0
 
@@ -461,6 +455,74 @@ def api_positions():
         return jsonify({"error": str(e), "positions": [], "orders": [], "balance": 0, "fills": []})
 
 
+def _compute_trade_pnl(fills: list[dict]) -> dict:
+    """
+    Compute true P&L by grouping fills by ticker.
+
+    Kalshi only creates settlement fills for WINNING contracts.  Losing
+    contracts expire worthless — the only record is the original buy fill
+    with profit=0.  We must compute:
+        net = settlement_payout - amount_paid - fees
+    grouped per ticker so losses show as negative values.
+
+    Returns a dict with keys:
+        by_ticker  : {ticker: {date, net_pnl, won}}
+        total_net  : float
+        total_fees : float
+        daily      : {date_str: float}  — net P&L per calendar day
+    """
+    by_ticker: dict[str, dict] = {}
+
+    for f in fills:
+        ticker = f.get("ticker") or "unknown"
+        if ticker not in by_ticker:
+            by_ticker[ticker] = {
+                "date":   (f.get("created_time") or "")[:10],
+                "cost":   0.0,
+                "payout": 0.0,
+                "fees":   0.0,
+            }
+
+        entry  = by_ticker[ticker]
+        profit = (f.get("profit") or 0)
+        fees   = (f.get("fees")   or 0)
+
+        side  = (f.get("side") or "yes").lower()
+        price = f.get("yes_price") if side == "yes" else f.get("no_price")
+        if price is None:
+            price = f.get("yes_price") or f.get("no_price") or 0
+        count = f.get("count") or 0
+
+        if profit > 0:
+            entry["payout"] += profit / 100
+            entry["fees"]   += fees   / 100
+        elif price and count:
+            entry["cost"]  += (price * count) / 100
+            entry["fees"]  += fees / 100
+            buy_date = (f.get("created_time") or "")[:10]
+            if buy_date:
+                entry["date"] = buy_date
+
+    daily: dict[str, float] = {}
+    total_net  = 0.0
+    total_fees = 0.0
+
+    for entry in by_ticker.values():
+        net = entry["payout"] - entry["cost"] - entry["fees"]
+        total_net  += net
+        total_fees += entry["fees"]
+        d = entry["date"]
+        if d:
+            daily[d] = daily.get(d, 0.0) + net
+
+    return {
+        "by_ticker":  by_ticker,
+        "total_net":  total_net,
+        "total_fees": total_fees,
+        "daily":      daily,
+    }
+
+
 @app.route("/api/stats")
 def api_stats():
     """Aggregate P&L stats from all fills."""
@@ -469,45 +531,40 @@ def api_stats():
         fills   = kalshi.get_fills()
         balance = kalshi.get_balance()
 
-        total_gross = 0.0
-        total_fees  = 0.0
-        daily: dict[str, float] = {}
-
-        for f in fills:
-            ts  = f.get("created_time", "")[:10]
-            pnl = (f.get("profit", 0) or 0) / 100
-            fee = (f.get("fees",   0) or 0) / 100
-            total_gross += pnl
-            total_fees  += fee
-            daily[ts]    = daily.get(ts, 0) + pnl - fee
+        pnl_data    = _compute_trade_pnl(fills)
+        total_net   = pnl_data["total_net"]
+        total_fees  = pnl_data["total_fees"]
+        daily       = pnl_data["daily"]
+        by_ticker   = pnl_data["by_ticker"]
 
         today_pnl   = daily.get(str(date.today()), 0.0)
         days_traded = len(daily)
         win_days    = sum(1 for v in daily.values() if v > 0)
         daily_list  = [{"date": d, "pnl": round(v, 2)} for d, v in sorted(daily.items())]
 
-        # Per-trade win/loss (only settled fills with non-zero profit)
-        settled = [f for f in fills if (f.get("profit") or 0) != 0]
-        win_trades  = sum(1 for f in settled if (f.get("profit") or 0) > 0)
-        loss_trades = sum(1 for f in settled if (f.get("profit") or 0) < 0)
+        # Per-ticker win/loss: won if net_pnl > 0, lost if net_pnl <= 0 and cost > 0
+        win_trades  = sum(1 for e in by_ticker.values()
+                         if (e["payout"] - e["cost"] - e["fees"]) > 0)
+        loss_trades = sum(1 for e in by_ticker.values()
+                         if e["cost"] > 0 and (e["payout"] - e["cost"] - e["fees"]) <= 0)
 
         return jsonify({
-            "balance":       round(balance, 2),
-            "total_gross":   round(total_gross, 2),
-            "total_fees":    round(total_fees, 2),
-            "total_net":     round(total_gross - total_fees, 2),
-            "today_pnl":     round(today_pnl, 2),
-            "daily_goal":    DAILY_PROFIT_GOAL,
-            "goal_progress": round(min(today_pnl / DAILY_PROFIT_GOAL * 100, 100), 1) if DAILY_PROFIT_GOAL else 0,
-            "days_traded":   days_traded,
-            "win_days":      win_days,
-            "loss_days":     days_traded - win_days,
-            "win_rate":      round(win_days / days_traded * 100, 1) if days_traded else 0,
-            "avg_daily":     round((total_gross - total_fees) / days_traded, 2) if days_traded else 0,
-            "win_trades":    win_trades,
-            "loss_trades":   loss_trades,
+            "balance":        round(balance, 2),
+            "total_gross":    round(total_net + total_fees, 2),
+            "total_fees":     round(total_fees, 2),
+            "total_net":      round(total_net, 2),
+            "today_pnl":      round(today_pnl, 2),
+            "daily_goal":     DAILY_PROFIT_GOAL,
+            "goal_progress":  round(min(today_pnl / DAILY_PROFIT_GOAL * 100, 100), 1) if DAILY_PROFIT_GOAL else 0,
+            "days_traded":    days_traded,
+            "win_days":       win_days,
+            "loss_days":      days_traded - win_days,
+            "win_rate":       round(win_days / days_traded * 100, 1) if days_traded else 0,
+            "avg_daily":      round(total_net / days_traded, 2) if days_traded else 0,
+            "win_trades":     win_trades,
+            "loss_trades":    loss_trades,
             "trade_win_rate": round(win_trades / (win_trades + loss_trades) * 100, 1) if (win_trades + loss_trades) else 0,
-            "daily":         daily_list,
+            "daily":          daily_list,
         })
     except Exception as e:
         return jsonify({"error": str(e)})
