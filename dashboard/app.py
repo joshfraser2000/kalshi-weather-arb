@@ -488,7 +488,9 @@ def api_close():
 def api_positions():
     try:
         kalshi    = get_kalshi()
-        positions = kalshi.get_positions()
+        # Filter to only positions with non-zero contracts — Kalshi returns full history
+        all_pos   = kalshi.get_positions()
+        positions = [p for p in all_pos if (p.get("position") or 0) != 0]
         orders    = kalshi.get_orders(status="resting")
         balance   = kalshi.get_balance()
         fills     = kalshi.get_fills()[-50:]
