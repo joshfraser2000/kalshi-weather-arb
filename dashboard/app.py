@@ -484,16 +484,6 @@ def api_close():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/debug_positions")
-def api_debug_positions():
-    """Temporary debug endpoint — returns raw positions with all field values."""
-    try:
-        kalshi  = get_kalshi()
-        all_pos = kalshi.get_positions()
-        return jsonify({"count": len(all_pos), "positions": all_pos[:5]})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
 
 @app.route("/api/positions")
 def api_positions():
