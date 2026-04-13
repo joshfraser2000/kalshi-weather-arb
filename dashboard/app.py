@@ -487,10 +487,24 @@ def api_close():
 @app.route("/api/positions")
 def api_positions():
     try:
-        kalshi    = get_kalshi()
-        # Filter to only positions with non-zero contracts — Kalshi returns full history
-        all_pos   = kalshi.get_positions()
-        positions = [p for p in all_pos if (p.get("position") or 0) != 0]
+        kalshi  = get_kalshi()
+        all_pos = kalshi.get_positions()
+
+        # Log the field names from the first position so we can see the real API structure
+        if all_pos:
+            log.info(f"Position fields: {list(all_pos[0].keys())}")
+            log.info(f"First position sample: {all_pos[0]}")
+
+        # Keep any position that is non-zero by any quantity field Kalshi might use
+        def _is_open(p):
+            return (
+                (p.get("position")          or 0) != 0 or
+                (p.get("market_exposure")   or 0) >  0 or
+                (p.get("total_traded_cost") or 0) >  0 or
+                (p.get("resting_orders_count") or 0) >  0
+            )
+
+        positions = [p for p in all_pos if _is_open(p)]
         orders    = kalshi.get_orders(status="resting")
         balance   = kalshi.get_balance()
         fills     = kalshi.get_fills()[-50:]
