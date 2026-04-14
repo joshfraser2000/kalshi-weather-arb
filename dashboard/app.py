@@ -52,6 +52,30 @@ CACHE_TTL_SECONDS   = 300
 
 ET = ZoneInfo("America/New_York")
 
+# ── Ticker date filter ────────────────────────────────────────────────────────
+
+_MONTH_NUM = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
+              "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
+
+def _ticker_date_ok(ticker: str) -> bool:
+    """Return True if the market date encoded in the ticker is today or future.
+
+    Kalshi tickers look like KXHIGHTHOU-26APR13-T89 where 26APR13 = 2026-04-13.
+    Returns True (keep market) when the date can't be parsed.
+    """
+    import re
+    m = re.search(r"-(\d{2})([A-Z]{3})(\d{2})-", ticker)
+    if not m:
+        return True
+    month = _MONTH_NUM.get(m.group(2))
+    if not month:
+        return True
+    try:
+        market_date = date(2000 + int(m.group(1)), month, int(m.group(3)))
+        return market_date >= date.today()
+    except ValueError:
+        return True
+
 # ── Singletons ────────────────────────────────────────────────────────────────
 
 _kalshi_client: KalshiClient | None = None
@@ -142,6 +166,7 @@ def _run_scan(execute: bool = False) -> dict:
         series = CITIES[city_key]["kalshi_series"]
         try:
             raw        = kalshi.get_markets_for_series(series, status="open")
+            raw        = [m for m in raw if _ticker_date_ok(m.get("ticker", ""))]
             parsed_raw = [p for m in raw if (p := parse_bin_market(m))]
             parsed_raw += [p for m in raw if (p := parse_threshold_market(m))]
             parsed     = enrich_with_orderbook_prices(parsed_raw, kalshi, max_spread=MAX_BID_ASK_SPREAD)
@@ -313,6 +338,7 @@ def api_opportunities():
         series = CITIES[city_key]["kalshi_series"]
         try:
             raw        = kalshi.get_markets_for_series(series, status="open")
+            raw        = [m for m in raw if _ticker_date_ok(m.get("ticker", ""))]
             parsed_raw = [p for m in raw if (p := parse_bin_market(m))]
             parsed_raw += [p for m in raw if (p := parse_threshold_market(m))]
             parsed     = enrich_with_orderbook_prices(parsed_raw, kalshi, max_spread=MAX_BID_ASK_SPREAD)
