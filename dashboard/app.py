@@ -539,49 +539,60 @@ def _compute_trade_pnl(fills: list[dict]) -> dict:
     """
     Compute true P&L by grouping fills by ticker.
 
-    Kalshi only creates settlement fills for WINNING contracts.  Losing
-    contracts expire worthless — the only record is the original buy fill
-    with profit=0.  We must compute:
-        net = settlement_payout - amount_paid - fees
-    grouped per ticker so losses show as negative values.
+    Kalshi API v2 fill fields (discovered via /api/debug_fills):
+      action          : "buy" (entry) or "sell" (settlement payout)
+      side            : "yes" or "no" — which side was transacted
+      count_fp        : contract count as a decimal string (e.g. "16.00")
+      yes_price_dollars / no_price_dollars : price per contract in dollars
+      fee_cost        : fee in dollars
+      created_time    : ISO timestamp
 
-    Returns a dict with keys:
-        by_ticker  : {ticker: {date, net_pnl, won}}
-        total_net  : float
-        total_fees : float
-        daily      : {date_str: float}  — net P&L per calendar day
+    Buy fills  → accumulate cost  (action == "buy")
+    Sell fills → settlement payout (action == "sell"); losing contracts
+                 expire worthless with no sell fill at all.
+
+    Returns dict with keys: by_ticker, total_net, total_fees, daily.
     """
     by_ticker: dict[str, dict] = {}
 
+    # Pass 1 — initialise entries; record bought_side from buy fills so we
+    # know which price column to use when we see the settlement sell fill.
     for f in fills:
         ticker = f.get("ticker") or "unknown"
         if ticker not in by_ticker:
             by_ticker[ticker] = {
-                "date":   (f.get("created_time") or "")[:10],
-                "cost":   0.0,
-                "payout": 0.0,
-                "fees":   0.0,
+                "date":        (f.get("created_time") or "")[:10],
+                "cost":        0.0,
+                "payout":      0.0,
+                "fees":        0.0,
+                "bought_side": None,   # "yes" or "no"
             }
+        if (f.get("action") or "").lower() == "buy" and by_ticker[ticker]["bought_side"] is None:
+            by_ticker[ticker]["bought_side"] = (f.get("side") or "no").lower()
 
+    # Pass 2 — accumulate costs and payouts
+    for f in fills:
+        ticker = f.get("ticker") or "unknown"
         entry  = by_ticker[ticker]
-        profit = (f.get("profit") or 0)
-        fees   = (f.get("fees")   or 0)
+        action = (f.get("action") or "").lower()
+        side   = (f.get("side")   or "no").lower()
+        count  = float(f.get("count_fp") or f.get("count") or 0)
+        fee    = float(f.get("fee_cost") or f.get("fees") or 0)
+        yes_px = float(f.get("yes_price_dollars") or f.get("yes_price") or 0)
+        no_px  = float(f.get("no_price_dollars")  or f.get("no_price")  or 0)
 
-        side  = (f.get("side") or "yes").lower()
-        price = f.get("yes_price") if side == "yes" else f.get("no_price")
-        if price is None:
-            price = f.get("yes_price") or f.get("no_price") or 0
-        count = f.get("count") or 0
+        entry["fees"] += fee
 
-        if profit > 0:
-            entry["payout"] += profit / 100
-            entry["fees"]   += fees   / 100
-        elif price and count:
-            entry["cost"]  += (price * count) / 100
-            entry["fees"]  += fees / 100
+        if action == "buy":
+            price = no_px if side == "no" else yes_px
+            entry["cost"] += price * count
             buy_date = (f.get("created_time") or "")[:10]
             if buy_date:
                 entry["date"] = buy_date
+        elif action == "sell":
+            # Settlement fill — payout price matches the side the user held
+            bought = entry.get("bought_side") or side
+            entry["payout"] += (no_px if bought == "no" else yes_px) * count
 
     daily: dict[str, float] = {}
     total_net  = 0.0
@@ -719,53 +730,23 @@ def api_trades():
     A position with no settlement fill is a total loss (net = -amount_paid).
     """
     try:
-        kalshi = get_kalshi()
-        fills  = kalshi.get_fills()
+        kalshi  = get_kalshi()
+        fills   = kalshi.get_fills()
+        pnl     = _compute_trade_pnl(fills)
 
-        # Keyed by ticker; accumulate cost, payout, and fees separately
-        by_ticker: dict[str, dict] = {}
-
+        # Build description from market_ticker (friendlier than raw ticker)
+        desc_map = {}
         for f in fills:
-            ticker = f.get("ticker") or "unknown"
-            if ticker not in by_ticker:
-                by_ticker[ticker] = {
-                    "description": f.get("market_title") or ticker,
-                    "date":        (f.get("created_time") or "")[:10],
-                    "cost":        0.0,   # dollars paid to enter
-                    "payout":      0.0,   # settlement dollars received
-                    "fees":        0.0,
-                }
-
-            entry  = by_ticker[ticker]
-            profit = (f.get("profit") or 0)
-            fees   = (f.get("fees")   or 0)
-
-            # Determine price paid for this fill (yes_price or no_price, in cents)
-            side  = (f.get("side") or "yes").lower()
-            price = f.get("yes_price") if side == "yes" else f.get("no_price")
-            if price is None:
-                price = f.get("yes_price") or f.get("no_price") or 0
-            count = f.get("count") or 0
-
-            if profit > 0:
-                # Settlement fill: we received money
-                entry["payout"] += profit / 100
-                entry["fees"]   += fees   / 100
-            elif price and count:
-                # Buy fill: we spent money (profit field is 0 here)
-                entry["cost"] += (price * count) / 100
-                entry["fees"] += fees / 100
-                # Keep the buy date as the trade date
-                buy_date = (f.get("created_time") or "")[:10]
-                if buy_date:
-                    entry["date"] = buy_date
+            t = f.get("ticker") or "unknown"
+            if t not in desc_map:
+                desc_map[t] = f.get("market_ticker") or f.get("market_title") or t
 
         trades = []
-        for entry in by_ticker.values():
+        for ticker, entry in pnl["by_ticker"].items():
             net_pnl = entry["payout"] - entry["cost"] - entry["fees"]
             trades.append({
                 "date":        entry["date"],
-                "description": entry["description"],
+                "description": desc_map.get(ticker, ticker),
                 "pnl":         round(net_pnl, 2),
             })
 
@@ -776,15 +757,6 @@ def api_trades():
         return jsonify([])
 
 
-@app.route("/api/debug_fills")
-def api_debug_fills():
-    """Temporary: return raw fills so we can inspect field names."""
-    try:
-        kalshi = get_kalshi()
-        fills  = kalshi.get_fills()
-        return jsonify(fills[:10])   # first 10 fills only
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 # ── Main page ─────────────────────────────────────────────────────────────────
 
