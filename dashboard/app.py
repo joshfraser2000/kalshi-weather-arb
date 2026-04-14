@@ -47,6 +47,7 @@ SCAN_INTERVAL_MINS  = int(os.getenv("SCAN_INTERVAL_MINS",  "30"))    # how often
 SCAN_START_ET       = int(os.getenv("SCAN_START_ET",       "9"))     # 9 AM ET — markets open
 SCAN_END_ET         = int(os.getenv("SCAN_END_ET",         "15"))    # 3 PM ET — markets thin out
 MAX_BID_ASK_SPREAD  = int(os.getenv("MAX_BID_ASK_SPREAD",  "55"))    # max bid-ask spread in cents to consider liquid
+KALSHI_FUNDED       = float(os.getenv("KALSHI_FUNDED",     "0"))     # amount deposited — used to compute total net P&L
 CACHE_TTL_SECONDS   = 300
 
 ET = ZoneInfo("America/New_York")
@@ -607,12 +608,17 @@ def api_stats():
         loss_trades = sum(1 for e in by_ticker.values()
                          if e["cost"] > 0 and (e["payout"] - e["cost"] - e["fees"]) <= 0)
 
+        # Use funded amount for true net P&L if configured — more reliable than
+        # parsing fills (which can have varying field names across API versions)
+        true_net = round(portfolio_value - KALSHI_FUNDED, 2) if KALSHI_FUNDED > 0 else round(total_net, 2)
+
         return jsonify({
             "balance":        round(portfolio_value, 2),   # total: cash + open positions
             "cash_balance":   round(balance, 2),
+            "funded_amount":  KALSHI_FUNDED,
             "total_gross":    round(total_net + total_fees, 2),
             "total_fees":     round(total_fees, 2),
-            "total_net":      round(total_net, 2),
+            "total_net":      true_net,
             "today_pnl":      round(today_pnl, 2),
             "daily_goal":     DAILY_PROFIT_GOAL,
             "goal_progress":  round(min(today_pnl / DAILY_PROFIT_GOAL * 100, 100), 1) if DAILY_PROFIT_GOAL else 0,
