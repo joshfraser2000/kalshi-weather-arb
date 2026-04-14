@@ -776,6 +776,16 @@ def api_trades():
         return jsonify([])
 
 
+@app.route("/api/debug_fills")
+def api_debug_fills():
+    """Temporary: return raw fills so we can inspect field names."""
+    try:
+        kalshi = get_kalshi()
+        fills  = kalshi.get_fills()
+        return jsonify(fills[:10])   # first 10 fills only
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ── Main page ─────────────────────────────────────────────────────────────────
 
 @app.route("/health")
