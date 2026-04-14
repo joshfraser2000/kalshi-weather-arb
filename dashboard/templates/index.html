@@ -71,6 +71,8 @@
   .opps-table th { color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
   .opps-table td { padding: 10px 8px; border-bottom: 1px solid var(--border)22; font-size: 12px; vertical-align: middle; }
   .opps-table tr:hover td { background: #ffffff06; }
+  .opp-check { width: 16px; height: 16px; accent-color: var(--green); cursor: pointer; }
+  .opp-row.selected td { background: #3fb95008; }
   .opp-city { font-weight: 700; }
   .opp-range { color: var(--blue); }
   .edge-pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
@@ -432,10 +434,11 @@ function renderOpps(opps, generatedAt, marketStatus, message) {
   btn.style.display = 'block';
   const ts = generatedAt ? new Date(generatedAt).toLocaleTimeString() : '';
   el.innerHTML = `
-    <div style="color:var(--muted);font-size:10px;margin-bottom:12px">${opps.length} opportunities found · scanned at ${ts}</div>
+    <div style="color:var(--muted);font-size:10px;margin-bottom:12px">${opps.length} opportunities found · scanned at ${ts} · check rows to select trades</div>
     <table class="opps-table">
       <thead>
         <tr>
+          <th style="width:32px"><input type="checkbox" class="opp-check" id="selectAllChk" title="Select all" onchange="toggleSelectAll(this)"></th>
           <th>CITY</th><th>TYPE</th><th>RANGE</th>
           <th>P(WIN)</th><th>MKT IMPLIED</th><th>EDGE</th>
           <th>COST</th><th>ENSEMBLE</th><th></th>
@@ -443,7 +446,8 @@ function renderOpps(opps, generatedAt, marketStatus, message) {
       </thead>
       <tbody>
         ${opps.map(o => `
-          <tr>
+          <tr class="opp-row" data-ticker="${o.ticker_a}">
+            <td><input type="checkbox" class="opp-check opp-select" value="${o.ticker_a}" onchange="onRowCheck()"></td>
             <td class="opp-city">${o.city}<br><span style="color:var(--muted);font-size:10px;font-weight:400">${o.city_name}</span></td>
             <td><span class="type-pill">${o.type === 'adjacent_spread' ? 'SPREAD' : 'SINGLE'}</span></td>
             <td class="opp-range">${o.range}</td>
@@ -458,6 +462,44 @@ function renderOpps(opps, generatedAt, marketStatus, message) {
       </tbody>
     </table>
   `;
+  updateExecuteBtn();
+}
+
+function toggleSelectAll(chk) {
+  document.querySelectorAll('.opp-select').forEach(c => {
+    c.checked = chk.checked;
+    c.closest('tr').classList.toggle('selected', chk.checked);
+  });
+  updateExecuteBtn();
+}
+
+function onRowCheck() {
+  const all   = document.querySelectorAll('.opp-select');
+  const checked = document.querySelectorAll('.opp-select:checked');
+  const selectAllChk = document.getElementById('selectAllChk');
+  if (selectAllChk) {
+    selectAllChk.checked       = checked.length === all.length && all.length > 0;
+    selectAllChk.indeterminate = checked.length > 0 && checked.length < all.length;
+  }
+  document.querySelectorAll('.opp-select').forEach(c => {
+    c.closest('tr').classList.toggle('selected', c.checked);
+  });
+  updateExecuteBtn();
+}
+
+function updateExecuteBtn() {
+  const btn     = document.getElementById('executeBtn');
+  const checked = document.querySelectorAll('.opp-select:checked');
+  if (checked.length > 0) {
+    btn.textContent = `▶ EXECUTE (${checked.length})`;
+    btn.style.display = 'block';
+  } else {
+    btn.textContent = '▶ EXECUTE';
+    // Keep visible but dim it so user knows to select something
+    btn.style.display = 'block';
+    btn.style.opacity = '0.4';
+  }
+  btn.style.opacity = checked.length > 0 ? '1' : '0.4';
 }
 
 // ── Forecast detail modal ────────────────────────────────────────────────────
@@ -516,12 +558,22 @@ function closeModal(e) {
 
 // ── Execute trades ───────────────────────────────────────────────────────────
 async function executeTrades() {
-  const btn = document.getElementById('executeBtn');
-  if (!confirm('Place live orders on Kalshi for all current opportunities?')) return;
+  const btn     = document.getElementById('executeBtn');
+  const checked = [...document.querySelectorAll('.opp-select:checked')];
+  if (checked.length === 0) {
+    alert('Select at least one trade using the checkboxes on the left.');
+    return;
+  }
+  const tickers = checked.map(c => c.value);
+  if (!confirm(`Place live orders on Kalshi for ${tickers.length} selected trade${tickers.length > 1 ? 's' : ''}?`)) return;
   btn.textContent = '⏳ EXECUTING...';
   btn.disabled = true;
   try {
-    const r = await fetch('/api/execute', { method: 'POST' });
+    const r = await fetch('/api/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickers }),
+    });
     const d = await r.json();
     if (d.error) {
       alert('Execute failed: ' + d.error);
@@ -536,8 +588,8 @@ async function executeTrades() {
   } catch(e) {
     alert('Execute error: ' + e.message);
   }
-  btn.textContent = '▶ EXECUTE';
   btn.disabled = false;
+  onRowCheck();  // restore label with current selection count
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────

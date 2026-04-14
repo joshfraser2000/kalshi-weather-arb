@@ -422,6 +422,13 @@ def api_execute():
             return jsonify({
                 "error": f"Daily goal ${DAILY_PROFIT_GOAL:.0f} already reached (${daily_pnl:.2f}). No trades placed."
             }), 400
+        # Filter to selected tickers if provided
+        body = request.get_json(silent=True) or {}
+        selected = body.get("tickers")  # list of ticker_a values, or None = all
+        if selected is not None:
+            opps = [o for o in opps if o.get("ticker_a") in selected]
+        if not opps:
+            return jsonify({"error": "No matching opportunities found for selected tickers."}), 400
         results = _execute_opportunities(opps, kalshi)
         return jsonify({"executed": len(results), "results": results})
     except Exception as e:
