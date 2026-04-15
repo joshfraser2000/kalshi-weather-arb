@@ -34,6 +34,24 @@ MAX_CONTRACTS     = int(os.getenv("MAX_CONTRACTS",       "500"))
 MIN_TRADE_COST    = float(os.getenv("MIN_TRADE_COST",    "0.25"))  # skip trades worth less than $0.25
 
 
+def _dynamic_max_pct(bankroll: float) -> float:
+    """
+    Scale MAX_PCT_BANKROLL upward as the bankroll grows (auto-compounding tiers).
+      < $75   → base MAX_PCT_BANKROLL (e.g. 5%)
+      $75–150 → base × 1.4            (e.g. 7%)
+      $150–300→ base × 2.0            (e.g. 10%)
+      $300+   → base × 2.5, capped at 0.15 (e.g. 12.5%, max 15%)
+    """
+    if bankroll < 75:
+        return MAX_PCT_BANKROLL
+    elif bankroll < 150:
+        return MAX_PCT_BANKROLL * 1.4
+    elif bankroll < 300:
+        return MAX_PCT_BANKROLL * 2.0
+    else:
+        return min(MAX_PCT_BANKROLL * 2.5, 0.15)
+
+
 def kelly_contracts(
     opp:      TradeOpportunity,
     bankroll: float,           # available capital in $
@@ -57,8 +75,14 @@ def kelly_contracts(
     if raw_kelly <= 0:
         return 0
 
-    # Apply fractional Kelly and hard cap
-    target_dollar = bankroll * min(raw_kelly * KELLY_FRACTION, MAX_PCT_BANKROLL)
+    # Apply fractional Kelly and hard cap (auto-compounding tier)
+    dynamic_max = _dynamic_max_pct(bankroll)
+    if dynamic_max != MAX_PCT_BANKROLL:
+        log.info(
+            f"{opp.city_key} auto-compound: bankroll=${bankroll:.2f} → "
+            f"max_pct={dynamic_max:.1%} (base={MAX_PCT_BANKROLL:.1%})"
+        )
+    target_dollar = bankroll * min(raw_kelly * KELLY_FRACTION, dynamic_max)
     contracts = int(target_dollar / cost)
 
     contracts = max(MIN_CONTRACTS, min(MAX_CONTRACTS, contracts))
