@@ -400,31 +400,50 @@ def _execute_opportunities(opps: list[dict], kalshi, conservative: bool = False)
     """Place live orders for a list of opportunity dicts. Returns execution log."""
     balance  = kalshi.get_balance()
     opp_objs = []
+
     for o in opps:
+        # ── Refresh price from live orderbook before placing ──────────────
+        # Cached scan prices may be hours old. Fetch current ask so the limit
+        # order matches immediately instead of sitting resting.
+        side_a = o.get("side_a", "yes")
+        try:
+            ob = kalshi.get_orderbook(o["ticker_a"])
+            live_ask = ob.get("yes_ask") if side_a == "yes" else ob.get("no_ask")
+            if live_ask is not None and 1 <= live_ask <= 99:
+                cost_cents = live_ask
+                log.info(f"{o['ticker_a']}: using live ask {live_ask}¢ (cached was {o['cost_cents']}¢)")
+            else:
+                cost_cents = o["cost_cents"]
+        except Exception:
+            cost_cents = o["cost_cents"]   # fall back to cached price
+
         obj = TradeOpportunity(
             city_key       = o["city"],
             trade_type     = o["type"],
             ticker_a       = o["ticker_a"],
-            price_a        = o["cost_cents"] if not o["ticker_b"] else o["cost_cents"] // 2,
+            price_a        = cost_cents if not o["ticker_b"] else cost_cents // 2,
             ticker_b       = o.get("ticker_b"),
-            price_b        = o["cost_cents"] // 2 if o.get("ticker_b") else None,
+            price_b        = cost_cents // 2 if o.get("ticker_b") else None,
             our_prob       = o["our_prob"] / 100,
             market_implied = o["market_impl"] / 100,
             edge           = o["edge"] / 100,
-            side_a         = o.get("side_a", "yes"),
+            side_a         = side_a,
             low_temp       = float(o["range"].lstrip("≥").rstrip("F").split("-")[0]),
             high_temp      = (999.0 if o["range"].startswith("≥")
                               else float(o["range"].split("-")[1].rstrip("F"))),
         )
         opp_objs.append(obj)
+
     allocs  = allocate(opp_objs, balance, conservative=conservative)
     results = []
     for opp_obj, n in allocs:
         try:
-            kalshi.place_order(opp_obj.ticker_a, opp_obj.side_a, "buy", n, opp_obj.price_a)
+            order = kalshi.place_order(opp_obj.ticker_a, opp_obj.side_a, "buy", n, opp_obj.price_a)
+            # Use actual status from Kalshi — "resting" means not yet filled
+            status = order.get("status") or "resting"
             if opp_obj.ticker_b and opp_obj.price_b:
                 kalshi.place_order(opp_obj.ticker_b, opp_obj.side_b, "buy", n, opp_obj.price_b)
-            results.append({"ticker": opp_obj.ticker_a, "contracts": n, "status": "filled"})
+            results.append({"ticker": opp_obj.ticker_a, "contracts": n, "status": status})
         except Exception as e:
             results.append({"ticker": opp_obj.ticker_a, "contracts": n, "status": f"error: {e}"})
     return results
