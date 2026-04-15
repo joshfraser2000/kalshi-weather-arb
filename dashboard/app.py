@@ -439,10 +439,14 @@ def api_execute():
         kalshi    = get_kalshi()
         target    = str(date.today())
         cache_key = f"opps:{target}"
-        cached    = _cache_get(cache_key)
-        opps      = cached["opportunities"] if cached else []
+        cached = _cache_get(cache_key)
+        opps   = cached["opportunities"] if cached else []
         if not opps:
-            return jsonify({"error": "No opportunities cached. Refresh first."}), 400
+            # Auto-scan instead of erroring — cache is empty (fresh deploy or first load)
+            result = _run_scan(execute=False)
+            opps   = result.get("opportunities", [])
+            if not opps:
+                return jsonify({"error": "No opportunities found after scanning. Markets may be closed or illiquid."}), 400
         daily_pnl = _get_daily_pnl()
         if daily_pnl >= DAILY_PROFIT_GOAL:
             return jsonify({

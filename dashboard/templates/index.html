@@ -561,7 +561,14 @@ async function executeTrades() {
   const btn     = document.getElementById('executeBtn');
   const checked = [...document.querySelectorAll('.opp-select:checked')];
   if (checked.length === 0) {
-    alert('Select at least one trade using the checkboxes on the left.');
+    // No opportunities loaded yet — auto-refresh first then let user select
+    const hasRows = document.querySelectorAll('.opp-select').length > 0;
+    if (!hasRows) {
+      alert('No opportunities loaded yet. Refreshing now — select trades then press Execute.');
+      await refreshOpps();
+    } else {
+      alert('Select at least one trade using the checkboxes on the left.');
+    }
     return;
   }
   const tickers = checked.map(c => c.value);
