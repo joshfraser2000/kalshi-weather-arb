@@ -438,11 +438,14 @@ def _execute_opportunities(opps: list[dict], kalshi, conservative: bool = False)
     results = []
     for opp_obj, n in allocs:
         try:
-            order = kalshi.place_order(opp_obj.ticker_a, opp_obj.side_a, "buy", n, opp_obj.price_a)
-            # Use actual status from Kalshi — "resting" means not yet filled
-            status = order.get("status") or "resting"
+            # Use market orders so they fill immediately at the best available
+            # price instead of sitting resting at a stale limit price.
+            order = kalshi.place_order(opp_obj.ticker_a, opp_obj.side_a, "buy", n,
+                                       opp_obj.price_a, order_type="market")
+            status = order.get("status") or "filled"
             if opp_obj.ticker_b and opp_obj.price_b:
-                kalshi.place_order(opp_obj.ticker_b, opp_obj.side_b, "buy", n, opp_obj.price_b)
+                kalshi.place_order(opp_obj.ticker_b, opp_obj.side_b, "buy", n,
+                                   opp_obj.price_b, order_type="market")
             results.append({"ticker": opp_obj.ticker_a, "contracts": n, "status": status})
         except Exception as e:
             results.append({"ticker": opp_obj.ticker_a, "contracts": n, "status": f"error: {e}"})
