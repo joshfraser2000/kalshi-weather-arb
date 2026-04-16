@@ -36,6 +36,14 @@ STRONG_EDGE = float(os.getenv("STRONG_EDGE", "0.12"))   # 12% = strong confidenc
 MIN_PROB    = float(os.getenv("MIN_PROB",    "0.55"))   # only trade bins with ≥55% win probability
 MAX_SPREAD  = int(os.getenv("MAX_SPREAD",    "5"))      # max positions per city per day
 
+# Kalshi charges a fee on each winning contract. We deduct this from the
+# expected payout when computing edge so that thin trades are filtered out
+# before they're placed. Set KALSHI_FEE_RATE=0 to disable fee adjustment.
+KALSHI_FEE_RATE    = float(os.getenv("KALSHI_FEE_RATE",    "0.07"))  # 7% of payout
+# Minimum expected gross profit in cents per contract after fees.
+# Trades earning less than this are skipped even if edge% passes.
+MIN_PROFIT_CENTS   = float(os.getenv("MIN_PROFIT_CENTS",   "3"))     # at least 3¢ per contract
+
 TradeType = Literal["single_bin", "adjacent_spread"]
 
 
@@ -128,9 +136,21 @@ def find_opportunities(
         price_b = bin_b["yes_ask"]
         market_implied = (price_a + price_b) / 100.0
 
-        edge = our_prob - market_implied
+        # Fee-adjusted edge: expected payout is reduced by Kalshi's fee on
+        # the winning contract. Without this, thin trades look profitable but
+        # lose money once the fee is deducted at settlement.
+        fee_adj_payout = 1.0 - KALSHI_FEE_RATE
+        edge = our_prob * fee_adj_payout - market_implied
+
+        # Also require a minimum absolute profit (in cents) to filter out
+        # trades where the gross profit is so small fees make it a loss.
+        expected_profit_cents = (our_prob * fee_adj_payout - market_implied) * 100
 
         if edge < MIN_EDGE:
+            continue
+        if expected_profit_cents < MIN_PROFIT_CENTS:
+            log.info(f"  SKIP spread {bin_a['ticker']}+{bin_b['ticker']}: "
+                     f"profit {expected_profit_cents:.1f}¢ < {MIN_PROFIT_CENTS:.0f}¢ min")
             continue
         if our_prob < MIN_PROB:
             continue
@@ -171,9 +191,13 @@ def find_opportunities(
         our_prob = forecast.prob_in_range(market["low"], market["high"])
         price    = market["yes_ask"]
         market_implied = price / 100.0
-        edge = our_prob - market_implied
+        fee_adj_payout = 1.0 - KALSHI_FEE_RATE
+        edge = our_prob * fee_adj_payout - market_implied
+        expected_profit_cents = edge * 100
 
         if edge < STRONG_EDGE:   # higher bar for single-bin
+            continue
+        if expected_profit_cents < MIN_PROFIT_CENTS:
             continue
         if our_prob < MIN_PROB:
             continue
@@ -208,9 +232,10 @@ def find_opportunities(
         prob_below = 1.0 - prob_above
 
         # YES direction: buy YES at yes_ask, win if high ≥ threshold
-        edge_yes = prob_above - yes_ask / 100.0
+        fee_adj = 1.0 - KALSHI_FEE_RATE
+        edge_yes = prob_above * fee_adj - yes_ask / 100.0
         # NO direction: buy NO at no_ask, win if high < threshold
-        edge_no  = prob_below - no_ask / 100.0
+        edge_no  = prob_below * fee_adj - no_ask / 100.0
 
         # Take whichever direction has better edge
         if edge_yes >= edge_no:

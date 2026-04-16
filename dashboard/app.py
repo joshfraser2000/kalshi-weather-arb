@@ -401,32 +401,63 @@ def _execute_opportunities(opps: list[dict], kalshi, conservative: bool = False)
     balance  = kalshi.get_balance()
     opp_objs = []
 
+    from arb.strategy import KALSHI_FEE_RATE, MIN_EDGE, MIN_PROFIT_CENTS
+
     for o in opps:
-        # ── Refresh price from live orderbook before placing ──────────────
-        # Cached scan prices may be hours old. Fetch current ask so the limit
-        # order matches immediately instead of sitting resting.
-        side_a = o.get("side_a", "yes")
+        # ── Refresh BOTH leg prices from live orderbook ───────────────────
+        # Cached scan prices may be hours old. Re-validate edge at live prices
+        # before placing — a market that moved against us since the scan should
+        # be skipped rather than blindly filled at a worse price.
+        side_a    = o.get("side_a", "yes")
+        ticker_b  = o.get("ticker_b")
+
         try:
-            ob = kalshi.get_orderbook(o["ticker_a"])
-            live_ask = ob.get("yes_ask") if side_a == "yes" else ob.get("no_ask")
-            if live_ask is not None and 1 <= live_ask <= 99:
-                cost_cents = live_ask
-                log.info(f"{o['ticker_a']}: using live ask {live_ask}¢ (cached was {o['cost_cents']}¢)")
-            else:
-                cost_cents = o["cost_cents"]
+            ob_a = kalshi.get_orderbook(o["ticker_a"])
+            live_a = ob_a.get("yes_ask") if side_a == "yes" else ob_a.get("no_ask")
+            price_a_live = live_a if (live_a and 1 <= live_a <= 99) else o["cost_cents"]
         except Exception:
-            cost_cents = o["cost_cents"]   # fall back to cached price
+            price_a_live = o["cost_cents"]
+
+        price_b_live = None
+        if ticker_b:
+            try:
+                ob_b = kalshi.get_orderbook(ticker_b)
+                live_b = ob_b.get("yes_ask")
+                price_b_live = live_b if (live_b and 1 <= live_b <= 99) else (o["cost_cents"] // 2)
+            except Exception:
+                price_b_live = o["cost_cents"] // 2
+
+        # Re-compute edge at live prices and skip if no longer worth trading
+        our_prob        = o["our_prob"] / 100
+        live_cost_cents = price_a_live + (price_b_live or 0)
+        live_market_impl = live_cost_cents / 100.0
+        live_edge        = our_prob * (1.0 - KALSHI_FEE_RATE) - live_market_impl
+        live_profit_c    = live_edge * 100
+
+        if live_edge < MIN_EDGE or live_profit_c < MIN_PROFIT_CENTS:
+            log.info(
+                f"SKIP {o['ticker_a']}: live edge {live_edge:+.1%} / "
+                f"profit {live_profit_c:.1f}¢ — price moved since scan "
+                f"(was {o['cost_cents']}¢, now {live_cost_cents}¢)"
+            )
+            continue
+
+        log.info(
+            f"{o['ticker_a']}: live prices a={price_a_live}¢"
+            + (f" b={price_b_live}¢" if price_b_live else "")
+            + f" → edge={live_edge:+.1%} profit={live_profit_c:.1f}¢ ✓"
+        )
 
         obj = TradeOpportunity(
             city_key       = o["city"],
             trade_type     = o["type"],
             ticker_a       = o["ticker_a"],
-            price_a        = cost_cents if not o["ticker_b"] else cost_cents // 2,
-            ticker_b       = o.get("ticker_b"),
-            price_b        = cost_cents // 2 if o.get("ticker_b") else None,
-            our_prob       = o["our_prob"] / 100,
-            market_implied = o["market_impl"] / 100,
-            edge           = o["edge"] / 100,
+            price_a        = price_a_live,
+            ticker_b       = ticker_b,
+            price_b        = price_b_live,
+            our_prob       = our_prob,
+            market_implied = live_market_impl,
+            edge           = live_edge,
             side_a         = side_a,
             low_temp       = float(o["range"].lstrip("≥").rstrip("F").split("-")[0]),
             high_temp      = (999.0 if o["range"].startswith("≥")
