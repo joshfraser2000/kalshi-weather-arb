@@ -12,7 +12,7 @@ CITIES: dict[str, dict] = {
     "NYC": {
         "name": "New York City",
         "lat": 40.7128, "lon": -74.0060,
-        "kalshi_series": "KXHIGHNY", "kalshi_precip_series": "",
+        "kalshi_series": "KXHIGHNY", "kalshi_precip_series": "KXRAINNYC",
         "nws_office": "OKX", "nws_grid": (33, 37),
         "tz": "America/New_York",
     },
@@ -33,7 +33,7 @@ CITIES: dict[str, dict] = {
     "HOU": {
         "name": "Houston",
         "lat": 29.7604, "lon": -95.3698,
-        "kalshi_series": "KXHIGHTHOU", "kalshi_precip_series": "",
+        "kalshi_series": "KXHIGHTHOU", "kalshi_precip_series": "KXRAINHOU",
         "nws_office": "HGX", "nws_grid": (66, 97),
         "tz": "America/Chicago",
     },
@@ -82,7 +82,7 @@ CITIES: dict[str, dict] = {
     "SEA": {
         "name": "Seattle",
         "lat": 47.6062, "lon": -122.3321,
-        "kalshi_series": "KXHIGHTSEA", "kalshi_precip_series": "",
+        "kalshi_series": "KXHIGHTSEA", "kalshi_precip_series": "KXRAINSEA",
         "nws_office": "SEW", "nws_grid": (124, 67),
         "tz": "America/Los_Angeles",
     },
@@ -117,7 +117,7 @@ CITIES: dict[str, dict] = {
     "MIA": {
         "name": "Miami",
         "lat": 25.7617, "lon": -80.1918,
-        "kalshi_series": "KXHIGHMIA", "kalshi_precip_series": "",
+        "kalshi_series": "KXHIGHMIA", "kalshi_precip_series": "KXRAINMIA",
         "nws_office": "MFL", "nws_grid": (110, 50),
         "tz": "America/New_York",
     },
@@ -145,7 +145,7 @@ CITIES: dict[str, dict] = {
     "MSY": {
         "name": "New Orleans",
         "lat": 29.9511, "lon": -90.0715,
-        "kalshi_series": "KXHIGHTNOLA", "kalshi_precip_series": "",
+        "kalshi_series": "KXHIGHTNOLA", "kalshi_precip_series": "KXRAINNO",
         "nws_office": "LIX", "nws_grid": (66, 52),
         "tz": "America/Chicago",
     },
