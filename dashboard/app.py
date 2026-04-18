@@ -819,6 +819,17 @@ def api_trades():
 
 
 
+@app.route("/api/debug_fills")
+def debug_fills():
+    """Temporary debug endpoint — shows raw fills from Kalshi API."""
+    try:
+        kalshi = get_kalshi()
+        fills  = kalshi.get_fills()
+        return jsonify({"count": len(fills), "fills": fills})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 # ── Main page ─────────────────────────────────────────────────────────────────
 
 @app.route("/health")
