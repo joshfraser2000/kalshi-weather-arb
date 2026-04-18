@@ -800,11 +800,15 @@ def api_trades():
 
         trades = []
         for ticker, entry in pnl["by_ticker"].items():
-            net_pnl = entry["payout"] - entry["cost"] - entry["fees"]
+            net_pnl  = entry["payout"] - entry["cost"] - entry["fees"]
+            # A position is a WIN if any payout was received (contract resolved
+            # in our favour). Using net_pnl here causes trades to show as LOSS
+            # when tiny profits (e.g. $0.01) are wiped out by fees.
+            display_pnl = entry["payout"] - entry["cost"] if entry["payout"] > 0 else net_pnl
             trades.append({
                 "date":        entry["date"],
                 "description": desc_map.get(ticker, ticker),
-                "pnl":         round(net_pnl, 2),
+                "pnl":         round(display_pnl, 2),
             })
 
         trades.sort(key=lambda x: x["date"], reverse=True)
