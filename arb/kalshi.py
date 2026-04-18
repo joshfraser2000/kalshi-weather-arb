@@ -360,6 +360,41 @@ def enrich_with_orderbook_prices(
     return enriched
 
 
+def parse_precip_market(market: dict) -> Optional[dict]:
+    """
+    Parse a Kalshi precipitation threshold market.
+
+    Kalshi rain market tickers follow patterns like:
+      KXRAINNY-26APR18-T01   → NYC precip ≥ 0.1"
+      KXRAINNY-26APR18-T05   → NYC precip ≥ 0.5"
+      KXRAINNY-26APR18-T10   → NYC precip ≥ 1.0"
+
+    The -T suffix encodes inches × 10 (T01 = 0.1", T05 = 0.5", T10 = 1.0").
+
+    Returns {threshold, ticker, yes_ask, yes_bid, type:"precip_threshold"}
+    or None if not parseable.
+    """
+    import re
+    ticker = market.get("ticker", "")
+    m_t = re.search(r"-T(\d+)$", ticker)
+    if not m_t:
+        return None
+    # Check this is a rain series (not a temperature series)
+    if not re.search(r"KXRAIN|KXPRECIP|KXWET", ticker, re.IGNORECASE):
+        return None
+    threshold = int(m_t.group(1)) / 10.0   # T01 → 0.1", T10 → 1.0"
+    ask = market.get("yes_ask")
+    bid = market.get("yes_bid")
+    return {
+        "ticker":    ticker,
+        "threshold": threshold,
+        "yes_ask":   ask if ask is not None else 50,
+        "yes_bid":   bid if bid is not None else 48,
+        "title":     market.get("title", ""),
+        "type":      "precip_threshold",
+    }
+
+
 def find_adjacent_bins(markets: list[dict]) -> list[tuple[dict, dict]]:
     """
     Return pairs of adjacent 1°F bins sorted by temperature.

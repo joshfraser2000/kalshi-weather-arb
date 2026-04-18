@@ -38,18 +38,22 @@ BIAS_HISTORY_DAYS = 30
 
 class ForecastResult:
     """
-    Ensemble-backed temperature forecast for a single city on a single date.
+    Ensemble-backed temperature + precipitation forecast for a single city on a single date.
 
     Attributes
     ----------
-    city_key        : str   — e.g. "NYC"
-    target_date     : date
-    members         : list[float]  — raw ensemble high-temp values (°F)
-    mean            : float — ensemble mean (°F)
-    std             : float — ensemble std-dev (°F), measure of uncertainty
-    bias_correction : float — mean observed error from recent history (°F)
-    corrected_mean  : float — bias-adjusted mean (°F)
-    nws_high        : float | None — NWS deterministic high (°F)
+    city_key         : str   — e.g. "NYC"
+    target_date      : date
+    members          : list[float]  — raw ensemble high-temp values (°F)
+    mean             : float — ensemble mean (°F)
+    std              : float — ensemble std-dev (°F)
+    bias_correction  : float — mean observed error from recent history (°F)
+    corrected_mean   : float — bias-adjusted mean (°F)
+    nws_high         : float | None — NWS deterministic high (°F)
+    precip_members   : list[float]  — ensemble precip totals (inches/day)
+    precip_mean      : float — ensemble mean precipitation (inches)
+    precip_std       : float — ensemble std-dev precipitation (inches)
+    nws_precip_prob  : float | None — NWS probability of precipitation (0–1)
     """
 
     def __init__(
@@ -59,21 +63,26 @@ class ForecastResult:
         members: list[float],
         bias_correction: float = 0.0,
         nws_high: Optional[float] = None,
+        precip_members: Optional[list[float]] = None,
+        nws_precip_prob: Optional[float] = None,
     ):
         self.city_key        = city_key
         self.target_date     = target_date
-        self.members         = [m - bias_correction for m in members]  # apply bias to every member
+        self.members         = [m - bias_correction for m in members]
         self.mean            = statistics.mean(self.members)
         self.std             = statistics.stdev(self.members) if len(self.members) > 1 else 3.0
         self.bias_correction = bias_correction
-        self.corrected_mean  = self.mean   # already corrected
+        self.corrected_mean  = self.mean
         self.nws_high        = nws_high
 
+        self.precip_members  = precip_members or []
+        self.precip_mean     = statistics.mean(self.precip_members) if self.precip_members else 0.0
+        self.precip_std      = (statistics.stdev(self.precip_members)
+                                if len(self.precip_members) > 1 else 0.1)
+        self.nws_precip_prob = nws_precip_prob
+
     def prob_in_range(self, low: float, high: float) -> float:
-        """
-        Fraction of ensemble members whose high temp falls in [low, high).
-        This is our empirical probability estimate for a Kalshi temperature bin.
-        """
+        """Fraction of ensemble members whose high temp falls in [low, high)."""
         in_range = sum(1 for t in self.members if low <= t < high)
         return in_range / len(self.members)
 
@@ -86,11 +95,23 @@ class ForecastResult:
         """P(high < threshold) — for 'below X°F' style markets."""
         return 1.0 - self.prob_above(threshold)
 
+    def prob_precip_above(self, threshold_inches: float) -> float:
+        """P(daily precip >= threshold) — for rain/precipitation markets."""
+        if not self.precip_members:
+            return self.nws_precip_prob or 0.0
+        above = sum(1 for p in self.precip_members if p >= threshold_inches)
+        return above / len(self.precip_members)
+
+    def prob_any_rain(self) -> float:
+        """P(any measurable precipitation) — threshold = 0.01 inches."""
+        return self.prob_precip_above(0.01)
+
     def __repr__(self) -> str:
+        precip_str = f" precip_μ={self.precip_mean:.2f}\"" if self.precip_members else ""
         return (
             f"ForecastResult({self.city_key} {self.target_date} "
             f"μ={self.corrected_mean:.1f}°F σ={self.std:.1f}°F "
-            f"n={len(self.members)} bias={self.bias_correction:+.1f}°F)"
+            f"n={len(self.members)} bias={self.bias_correction:+.1f}°F{precip_str})"
         )
 
 
@@ -99,13 +120,24 @@ async def _fetch_ensemble(
     lon: float,
     target_date: date,
     client: httpx.AsyncClient,
-) -> list[float]:
+) -> tuple[list[float], list[float]]:
     """
     Pull GFS + ECMWF + ICON ensemble members from Open-Meteo.
-    Returns a flat list of daily-high temperature values (°F) for target_date.
+    Returns (temp_members_°F, precip_members_inches).
     """
     async with _OPEN_METEO_SEM:
         return await _fetch_ensemble_inner(lat, lon, target_date, client)
+
+
+def _extract_ensemble_field(data: dict, field_prefix: str, idx: int) -> list[float]:
+    """Extract all member values for a field prefix at the given date index."""
+    values = []
+    for key, vals in data["daily"].items():
+        if key.startswith(field_prefix) and key != field_prefix:
+            v = vals[idx]
+            if v is not None:
+                values.append(float(v))
+    return values
 
 
 async def _fetch_ensemble_inner(
@@ -113,111 +145,46 @@ async def _fetch_ensemble_inner(
     lon: float,
     target_date: date,
     client: httpx.AsyncClient,
-) -> list[float]:
-    members: list[float] = []
+) -> tuple[list[float], list[float]]:
+    """Returns (temp_members, precip_members) both as flat lists."""
+    temp_members:   list[float] = []
+    precip_members: list[float] = []
 
-    # ── GFS (31 members) ─────────────────────────────────────────────────────
-    try:
-        r = await client.get(
-            ENSEMBLE_URL,
-            params={
-                "latitude":         lat,
-                "longitude":        lon,
-                "daily":            "temperature_2m_max",
-                "temperature_unit": "fahrenheit",
-                "forecast_days":    7,
-                "models":           "gfs_seamless",
-            },
-            timeout=20,
-        )
-        r.raise_for_status()
-        data = r.json()
-        dates = data["daily"]["time"]
-        # Use target date if available, else nearest future date
-        if str(target_date) in dates:
-            idx = dates.index(str(target_date))
-        elif dates:
-            idx = 0
-            log.debug(f"Target {target_date} not in GFS forecast, using {dates[0]}")
-        else:
-            idx = None
-        if idx is not None:
-            for key, vals in data["daily"].items():
-                if key.startswith("temperature_2m_max") and key != "temperature_2m_max":
-                    v = vals[idx]
-                    if v is not None:
-                        members.append(float(v))
-        log.debug(f"GFS members collected: {len(members)}")
-    except Exception as e:
-        log.warning(f"GFS ensemble fetch failed: {e}")
+    for model, label in [
+        ("gfs_seamless",  "GFS"),
+        ("ecmwf_ifs04",   "ECMWF"),
+        ("icon_seamless",  "ICON"),
+    ]:
+        try:
+            r = await client.get(
+                ENSEMBLE_URL,
+                params={
+                    "latitude":         lat,
+                    "longitude":        lon,
+                    "daily":            ["temperature_2m_max", "precipitation_sum"],
+                    "temperature_unit": "fahrenheit",
+                    "precipitation_unit": "inch",
+                    "forecast_days":    7,
+                    "models":           model,
+                },
+                timeout=20,
+            )
+            r.raise_for_status()
+            data  = r.json()
+            dates = data["daily"]["time"]
+            if str(target_date) in dates:
+                idx = dates.index(str(target_date))
+            elif dates:
+                idx = 0
+            else:
+                continue
+            temp_members   += _extract_ensemble_field(data, "temperature_2m_max",  idx)
+            precip_members += _extract_ensemble_field(data, "precipitation_sum",    idx)
+            log.debug(f"{label}: temp={len(temp_members)} precip={len(precip_members)} members")
+        except Exception as e:
+            log.warning(f"{label} ensemble fetch failed: {e}")
 
-    # ── ECMWF IFS (51 members) ───────────────────────────────────────────────
-    try:
-        r = await client.get(
-            ENSEMBLE_URL,
-            params={
-                "latitude":         lat,
-                "longitude":        lon,
-                "daily":            "temperature_2m_max",
-                "temperature_unit": "fahrenheit",
-                "forecast_days":    7,
-                "models":           "ecmwf_ifs04",
-            },
-            timeout=20,
-        )
-        r.raise_for_status()
-        data = r.json()
-        dates = data["daily"]["time"]
-        if str(target_date) in dates:
-            idx = dates.index(str(target_date))
-        elif dates:
-            idx = 0
-        else:
-            idx = None
-        if idx is not None:
-            for key, vals in data["daily"].items():
-                if key.startswith("temperature_2m_max") and key != "temperature_2m_max":
-                    v = vals[idx]
-                    if v is not None:
-                        members.append(float(v))
-        log.debug(f"ECMWF members collected (cumulative): {len(members)}")
-    except Exception as e:
-        log.warning(f"ECMWF ensemble fetch failed: {e}")
-
-    # ── ICON-EPS (40 members) ────────────────────────────────────────────────
-    try:
-        r = await client.get(
-            ENSEMBLE_URL,
-            params={
-                "latitude":         lat,
-                "longitude":        lon,
-                "daily":            "temperature_2m_max",
-                "temperature_unit": "fahrenheit",
-                "forecast_days":    7,
-                "models":           "icon_seamless",
-            },
-            timeout=20,
-        )
-        r.raise_for_status()
-        data = r.json()
-        dates = data["daily"]["time"]
-        if str(target_date) in dates:
-            idx = dates.index(str(target_date))
-        elif dates:
-            idx = 0
-        else:
-            idx = None
-        if idx is not None:
-            for key, vals in data["daily"].items():
-                if key.startswith("temperature_2m_max") and key != "temperature_2m_max":
-                    v = vals[idx]
-                    if v is not None:
-                        members.append(float(v))
-        log.debug(f"ICON members collected (cumulative): {len(members)}")
-    except Exception as e:
-        log.warning(f"ICON ensemble fetch failed: {e}")
-
-    return members
+    return temp_members, precip_members
 
 
 async def _fetch_nws_high(
@@ -225,10 +192,10 @@ async def _fetch_nws_high(
     nws_grid: tuple[int, int],
     target_date: date,
     client: httpx.AsyncClient,
-) -> Optional[float]:
+) -> tuple[Optional[float], Optional[float]]:
     """
-    Pull official NWS point forecast and extract the predicted high temp (°F)
-    for target_date.
+    Pull official NWS point forecast.
+    Returns (high_temp_°F, precip_probability_0_to_1) for target_date.
     """
     try:
         x, y = nws_grid
@@ -239,10 +206,14 @@ async def _fetch_nws_high(
         for period in periods:
             start = datetime.fromisoformat(period["startTime"]).date()
             if start == target_date and period["isDaytime"]:
-                return float(period["temperature"])
+                high = float(period["temperature"])
+                pop  = period.get("probabilityOfPrecipitation", {})
+                pop_val = pop.get("value") if isinstance(pop, dict) else None
+                precip_prob = float(pop_val) / 100.0 if pop_val is not None else None
+                return high, precip_prob
     except Exception as e:
         log.warning(f"NWS forecast fetch failed for {nws_office}: {e}")
-    return None
+    return None, None
 
 
 async def _compute_bias_correction(
@@ -323,7 +294,7 @@ async def get_forecast(
     """
     lat, lon = city["lat"], city["lon"]
 
-    members, nws_high, bias = await asyncio.gather(
+    (members, precip_members), (nws_high, nws_precip_prob), bias = await asyncio.gather(
         _fetch_ensemble(lat, lon, target_date, client),
         _fetch_nws_high(city["nws_office"], city["nws_grid"], target_date, client),
         _compute_bias_correction(lat, lon, client),
@@ -338,9 +309,12 @@ async def get_forecast(
         members=members,
         bias_correction=bias,
         nws_high=nws_high,
+        precip_members=precip_members,
+        nws_precip_prob=nws_precip_prob,
     )
     log.info(
-        f"{city_key} {target_date}: {result} | NWS={nws_high}°F | {len(members)} ensemble members"
+        f"{city_key} {target_date}: {result} | NWS={nws_high}°F | "
+        f"{len(members)} temp / {len(precip_members)} precip ensemble members"
     )
     return result
 

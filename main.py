@@ -41,7 +41,7 @@ load_dotenv()
 from arb.cities   import CITIES
 from arb.weather  import get_all_forecasts
 from arb.kalshi   import KalshiClient, find_adjacent_bins
-from arb.strategy import find_opportunities, summarize_opportunities, TradeOpportunity
+from arb.strategy import find_opportunities, find_precip_opportunities, summarize_opportunities, TradeOpportunity
 from arb.sizing   import allocate
 from arb.logger   import get_logger
 
@@ -96,19 +96,27 @@ async def scan(target_date: date, cities: dict) -> list[TradeOpportunity]:
             raw_markets = kalshi.get_markets_for_series(series, status="open")
             if not raw_markets:
                 log.warning(f"{city_key}: No open markets found for series {series}")
-                continue
-
-            # Parse bin markets from raw API response
-            from arb.kalshi import parse_bin_market
-            parsed = [p for m in raw_markets if (p := parse_bin_market(m)) is not None]
-            log.info(f"{city_key}: {len(raw_markets)} markets → {len(parsed)} parsed bins")
-
-            opps = find_opportunities(forecast, parsed)
-            all_opportunities.extend(opps)
+            else:
+                from arb.kalshi import parse_bin_market
+                parsed = [p for m in raw_markets if (p := parse_bin_market(m)) is not None]
+                log.info(f"{city_key}: {len(raw_markets)} markets → {len(parsed)} parsed bins")
+                all_opportunities.extend(find_opportunities(forecast, parsed))
 
         except Exception as e:
-            log.error(f"{city_key}: market query failed — {e}")
-            continue
+            log.error(f"{city_key}: temperature market query failed — {e}")
+
+        # Precipitation markets (skipped if series not configured)
+        precip_series = city.get("kalshi_precip_series", "")
+        if precip_series:
+            try:
+                from arb.kalshi import parse_precip_market
+                raw_precip = kalshi.get_markets_for_series(precip_series, status="open")
+                if raw_precip:
+                    parsed_precip = [p for m in raw_precip if (p := parse_precip_market(m)) is not None]
+                    log.info(f"{city_key}: {len(raw_precip)} precip markets → {len(parsed_precip)} parsed")
+                    all_opportunities.extend(find_precip_opportunities(forecast, parsed_precip))
+            except Exception as e:
+                log.error(f"{city_key}: precip market query failed — {e}")
 
     kalshi.close()
     return all_opportunities

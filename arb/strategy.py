@@ -290,6 +290,95 @@ def find_opportunities(
     return opportunities[:MAX_SPREAD]
 
 
+def find_precip_opportunities(
+    forecast: ForecastResult,
+    markets:  list[dict],   # parsed precipitation markets for this city
+) -> list[TradeOpportunity]:
+    """
+    Find edge in Kalshi precipitation threshold markets.
+
+    Kalshi rain markets are threshold-style: "Will it rain at least X inches?"
+    YES = precip >= threshold, NO = precip < threshold.
+
+    We compare our ensemble-derived probability to the market's implied price
+    using the same edge formula as temperature threshold markets.
+    """
+    opportunities: list[TradeOpportunity] = []
+
+    for mkt in markets:
+        if mkt.get("type") != "precip_threshold":
+            continue
+
+        threshold = mkt["threshold"]   # inches
+        yes_ask   = mkt["yes_ask"]
+        yes_bid   = mkt.get("yes_bid", 100 - yes_ask)
+        no_ask    = mkt.get("no_ask", 100 - yes_bid)
+
+        prob_rain    = forecast.prob_precip_above(threshold)
+        prob_no_rain = 1.0 - prob_rain
+
+        fee_adj   = 1.0 - KALSHI_FEE_RATE
+        edge_yes  = prob_rain    * fee_adj - yes_ask / 100.0
+        edge_no   = prob_no_rain * fee_adj - no_ask  / 100.0
+
+        # NWS sanity check: if NWS precip probability available, veto if contradictory
+        if forecast.nws_precip_prob is not None:
+            nws_says_rain = forecast.nws_precip_prob >= 0.5
+            if edge_yes >= edge_no and not nws_says_rain:
+                log.info(
+                    f"  VETO {forecast.city_key} rain ≥{threshold}\": "
+                    f"model wants YES but NWS POP={forecast.nws_precip_prob:.0%}"
+                )
+                continue
+            if edge_no > edge_yes and nws_says_rain:
+                log.info(
+                    f"  VETO {forecast.city_key} rain ≥{threshold}\": "
+                    f"model wants NO but NWS POP={forecast.nws_precip_prob:.0%}"
+                )
+                continue
+
+        if edge_yes >= edge_no:
+            edge, side, price, our_prob = edge_yes, "yes", yes_ask, prob_rain
+            dir_label = f"≥{threshold}\" rain"
+        else:
+            edge, side, price, our_prob = edge_no, "no", no_ask, prob_no_rain
+            dir_label = f"<{threshold}\" rain"
+
+        if edge < MIN_EDGE:
+            continue
+        if our_prob < MIN_PROB:
+            continue
+        if (edge * 100) < MIN_PROFIT_CENTS:
+            continue
+
+        opp = TradeOpportunity(
+            city_key       = forecast.city_key,
+            trade_type     = "single_bin",
+            ticker_a       = mkt["ticker"],
+            price_a        = price,
+            side_a         = side,
+            our_prob       = our_prob,
+            market_implied = price / 100.0,
+            edge           = edge,
+            low_temp       = 0.0,
+            high_temp      = threshold,
+            forecast_mean  = forecast.precip_mean,
+            forecast_std   = forecast.precip_std,
+            ensemble_n     = len(forecast.precip_members),
+        )
+        opp.notes = [
+            f"rain threshold: {dir_label} (buy {side.upper()})",
+            f"ensemble precip μ={forecast.precip_mean:.2f}\" σ={forecast.precip_std:.2f}\"",
+        ]
+        if forecast.nws_precip_prob is not None:
+            opp.notes.append(f"NWS POP={forecast.nws_precip_prob:.0%}")
+        log.info(f"  PRECIP found: {opp}")
+        opportunities.append(opp)
+
+    opportunities.sort(key=lambda o: o.edge, reverse=True)
+    return opportunities[:MAX_SPREAD]
+
+
 def summarize_opportunities(opps: list[TradeOpportunity]) -> None:
     """Pretty-print a ranked table of all opportunities."""
     if not opps:
