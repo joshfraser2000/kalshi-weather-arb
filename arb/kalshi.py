@@ -224,7 +224,7 @@ class KalshiClient:
         return r.json().get("market", r.json())
 
     def get_fills(self) -> list[dict]:
-        r = self._get("/portfolio/fills")
+        r = self._get("/portfolio/fills?limit=200")
         r.raise_for_status()
         return r.json().get("fills", [])
 
